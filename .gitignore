@@ -205,3 +205,46 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ======================
+# Project-specific
+# ======================
+
+# Data — never commit raw or processed data
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Outputs — never commit figures or model artifacts
+outputs/figures/*
+outputs/models/*
+!outputs/figures/.gitkeep
+!outputs/models/.gitkeep
+
+# Parquet and other data formats
+*.parquet
+*.snappy.parquet
+*.json
+*.csv
+*.tsv
+*.orc
+*.avro
+
+# Spark
+spark-warehouse/
+derby.log
+metastore_db/
+*.crc
+
+# Jupyter outputs (keep notebooks, ignore checkpoints — already covered above but being explicit)
+**/.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Cluster/SLURM job files
+*.out
+*.err
+slurm-*.out
