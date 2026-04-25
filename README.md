@@ -78,9 +78,6 @@ spark = SparkSession.builder \
     .getOrCreate()
 ```
 
-<img width="749" height="78" alt="image" src="https://github.com/user-attachments/assets/fc73e156-f6e7-43d1-ae85-8b0a93a025ff" />
-Image: Spark UI Screenshot
-
 ### Data Access
 The dataset is hosted on HuggingFace and must be downloaded directly to the cluster. Raw data files are gitignored.
 
