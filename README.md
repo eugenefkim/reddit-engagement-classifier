@@ -89,7 +89,7 @@ spark = SparkSession.builder \
 This configuration is acceptable for EDA but will be modified once distributed computation is configured. 
 
 ### SparkUI Screenshot
-
+<img width="853" height="423" alt="SparkUI_Screenshot_Local" src="https://github.com/user-attachments/assets/42f747a7-9c31-4201-8586-89919649a849" />
 
 ## Notebook
 
