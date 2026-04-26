@@ -41,24 +41,32 @@ Class boundaries are assigned using per-subreddit quantile thresholds rather tha
 
 ## Environment Setup
 
-### Cluster Access
-All computation is performed on the SDSC Expanse HPC cluster via NSF ACCESS. 
+### Cluster and Repository Access
+All work for this repo was performed on the SDSC Expanse HPC cluster. Configuration settings must be set based on environment. 
 
-1. Log into the Expanse portal at [portal.expanse.sdsc.edu](https://portal.expanse.sdsc.edu) using your ACCESS credentials
-2. Clone the repository into your home directory:
+1. Log into the Expanse. 
+2. Clone the repository:
 ```bash
 git clone https://github.com/eugenefkim/reddit-engagement-classifier.git
 cd reddit-engagement-classifier
 ```
 
-### SparkSession Configuration
+### Data Access
+
+> **Note:** The module versions below (`cpu/0.15.4`, `gcc/10.2.0`) are specific to the SDSC Expanse cluster Python 3.6 settings. Data loading instructions must be configured based on working environment.
+
+The dataset is hosted on HuggingFace and will be downloaded directly to the cluster for this repository structure. Raw data files are gitignored.
+
+To download the data, open and run the [`notebooks/data_download.ipynb`](notebooks/data_download.ipynb) notebook sequentally from your JupyterLab session on Expanse, following the notebook instructions. This must be run on a compute node (not the login node) to avoid memory limitations, and should be run using Jupyter Notebook settings. 
+
+The dataset is downloaded into `data/raw/`, approximately 89GB of 218 Parquet files. The notebook loads data directly from `data/raw/` using a relative path.
+
+### SDSC Expanse Setup and SparkSession Configuration
 
 > [!WARNING]
-> EUG'S NOTE: We might want to reconsider the SparkSession configuration here, I wrote a placeholder explanation for Jack's original config but if we end up replacing it this section should be edited.
+> Currently SparkSession is defaulting to Local and the below configuration is set to account for this. Edit this section with the proper SparkSession configuration once distributed computing is configured.
 
-For our exploratory analysis, we use a 16-core, 128GB memory node. Executor instances are set to 6 to leave headroom for system overhead, rather than the strict `Total Cores - 1 = 15` formula. Executor memory is calculated as `(Total Memory - Driver Memory) / Executor Instances = (128 - 8) / 6 ≈ 20GB`, conservatively set to 16GB to account for Spark memory overhead and off-heap usage. 
-
-This configuration is acceptable for EDA but will likely be modified during Milestone 3 to obtain something like 3-5 cores per executor with ~38 GB per executor to reduce disk spills on the heavy per-author aggregations which our pipeline will require.
+For our exploratory analysis, we use a 16-core, 128GB memory node. Driver is allocated 8GB to account for Local default Spark Master configuration. Executor instances are set to 6 to leave headroom for system overhead, rather than the strict `Total Cores - 1 = 15` formula. Executor memory would be calculated as `(Total Memory - Driver Memory) / Executor Instances = (128 - 8) / 6 ≈ 20GB`, conservatively set to 16GB to account for Spark memory overhead and off-heap usage. However, executor configurations are not being set due to the Local SparkSession defaulting that is currently occurring. 
 
 ```python
 from pyspark.sql import SparkSession
@@ -78,28 +86,12 @@ spark = SparkSession.builder \
     .getOrCreate()
 ```
 
-### Data Access
-The dataset is hosted on HuggingFace and must be downloaded directly to the cluster. Raw data files are gitignored.
+This configuration is acceptable for EDA but will be modified once distributed computation is configured. 
 
-> [!WARNING]
-> EUG'S NOTE: This section is likely incomplete. The code block below is a placeholder of what I thought could work but has not been verified. Will replace with the actual download/load method once my cluster access is set up.
-> Jack's current notebook hardcodes a personal scratch path — this must be replaced with a dynamic approach before submitting Milestone 2.
+### SparkUI Screenshot
 
-```python
-# In your notebook, run this once to download the dataset to the cluster
-from huggingface_hub import snapshot_download
-
-snapshot_download(
-    repo_id="fddemarco/pushshift-reddit",
-    repo_type="dataset",
-    local_dir="data/raw/"
-)
-```
 
 ## Notebook
-
-> [!WARNING]
-> EUG'S NOTE: We may want to rename notebook names and reorganize/consolidate code. Once that's done this section will likely need modifying.
 
 The Milestone 2 EDA and data exploration notebook is located at: [`notebooks/Milestone2_Pushshift.ipynb`](notebooks/Milestone2_Pushshift.ipynb)
 
