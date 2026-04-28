@@ -63,18 +63,14 @@ The dataset is downloaded into `data/raw/`, approximately 89GB of 218 Parquet fi
 
 ### SDSC Expanse Setup and SparkSession Configuration
 
-> [!WARNING]
-> Currently SparkSession is defaulting to Local and the below configuration is set to account for this. Edit this section with the proper SparkSession configuration once distributed computing is configured.
+#### Current Configuration (Local Mode)
 
-For our exploratory analysis, we use a 16-core, 128GB memory node. Driver is allocated 8GB to account for Local default Spark Master configuration. Executor instances are set to 6 to leave headroom for system overhead, rather than the strict `Total Cores - 1 = 15` formula. Executor memory would be calculated as `(Total Memory - Driver Memory) / Executor Instances = (128 - 8) / 6 ≈ 20GB`, conservatively set to 16GB to account for Spark memory overhead and off-heap usage. However, executor configurations are not relevant due to the Local SparkSession defaulting that is currently occurring. 
+The Expanse JupyterLab portal launches Spark inside a Singularity container which defaults to `local[*]` mode. This means there is no separate cluster manager and no worker processes and all driver coordination and task execution run in a single JVM, using the node's 16 cores as parallel thread slots. Parallelism is still achieved, but it is thread-based within one JVM rather than distributed across separate executor processes. As a result, executor configuration parameters are set but not active, and the Spark UI shows a single executor row. We also allocate 8GB to driver memory account for this.
 
 ```python
 from pyspark.sql import SparkSession
 
-# 16 cores, 128GB total memory
-# Executor instances = Total Cores - 1 = 15
-# Executor memory = (Total Memory - Driver Memory) / Executor Instances
-#                 = (128 - 8) / 6 ≈ 16GB (6 executors used to leave headroom)
+# 16 cores, 128GB total memory (local mode)
 spark = SparkSession.builder \
     .appName("PushshiftRedditEDA") \
     .config("spark.driver.memory", "8g") \
@@ -86,10 +82,30 @@ spark = SparkSession.builder \
     .getOrCreate()
 ```
 
-This configuration is acceptable for EDA but will be modified once distributed computation is configured. 
-
-### SparkUI Screenshot
+#### SparkUI Screenshot
 <img width="853" height="423" alt="SparkUI_Screenshot_Local" src="https://github.com/user-attachments/assets/42f747a7-9c31-4201-8586-89919649a849" />
+
+#### Proposed Distributed Configuration (Milestone 3)
+
+Per instructor recommendation and the Spark HPC Best Practices guide, the configuration will be updated once true distributed mode is available. Driver memory is reduced to 2GB since the driver only coordinates tasks and does not process data directly. Executor instances are set to 15 (16 total cores - 1 reserved for the driver), with executor memory calculated as `(128 - 2) / 15 ≈ 8GB` each. This maximizes memory available for the heavy per-author and per-subreddit aggregations the Milestone 3 pipeline requires.
+
+```python
+from pyspark.sql import SparkSession
+
+# 16 cores, 128GB total memory
+# Driver memory: 2GB (coordinates tasks only, does not process data)
+# Executor instances: 16 cores - 1 (driver) = 15
+# Executor memory: (128 - 2) / 15 ≈ 8GB
+spark = SparkSession.builder \
+    .appName("PushshiftRedditPipeline") \
+    .config("spark.driver.memory", "2g") \
+    .config("spark.driver.maxResultSize", "4g") \
+    .config("spark.executor.memory", "8g") \
+    .config("spark.executor.instances", "15") \
+    .config("spark.sql.shuffle.partitions", "200") \
+    .config("spark.sql.parquet.enableVectorizedReader", "true") \
+    .getOrCreate()
+```
 
 ## Notebook
 
