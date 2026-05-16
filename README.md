@@ -238,6 +238,186 @@ All features will be derived from pre-publication information only to prevent da
 - `VectorAssembler` — final feature vector construction
 - `StandardScaler` — feature normalization
 
+## Milestone 3 — Preprocessing and XGBoost Model Fitting (4-Class and Binary)
+
+### Notebook
+
+The Milestone 3 preprocessing and model fitting notebook is located at: [`notebooks/Milestone3_Pushshift.ipynb`](notebooks/Milestone3_Pushshift.ipynb)
+
+### Preprocessing Pipeline
+
+All preprocessing was implemented using Spark DataFrame operations and Spark MLlib transformers on the full 535,480,818 row filtered dataset on SDSC Expanse.
+
+**Filtering and Cleaning:**
+
+| Filter | Rows Removed | Reason |
+|---|---|---|
+| Null `subreddit` / `subreddit_id` | ~306,479 | Cannot contribute to per-subreddit features |
+| Null `score` | 21 | Required for label generation |
+| Negative `num_comments` | 1,090 | Pushshift artifact, value unverifiable |
+| Duplicate `ID` | 0 | Only 1 duplicate row existed and removal was not worth the compute |
+
+**Label Generation:**
+Per-subreddit 75th percentile thresholds on `score` and `num_comments` were computed using `Window.partitionBy()` and `percentile_approx()` to assign four engagement archetypes. A binary high/low label was also generated for comparison. StringIndexer was applied to both label columns.
+
+| Label | Class | Distribution |
+|---|---|---|
+| Low-engagement | 0 | 44.3% |
+| Viral | 1 | 29.9% |
+| Crowd-pleaser | 2 | 14.0% |
+| Debate-starter | 3 | 11.8% |
+
+**Binary Label Distribution:**
+
+| Label | Class | Distribution |
+|---|---|---|
+| Low-engagement | 0 | 44.3% |
+| High-engagement | 1 | 55.7% |
+
+**Features (19 total, all pre-publication):**
+- Title structural: `title_len`, `has_question`, `has_exclamation`, `title_has_number`, `title_is_allcaps`
+- Post type: `has_title`, `is_text_post`, `selftext_len`
+- Author flags: `is_known_bot`, `is_anonymous_author`
+- Temporal: `hour_of_day`, `day_of_week`
+- Author history aggregations: `author_post_count`, `author_mean_score`
+- Subreddit context aggregations: `subreddit_post_count`, `subreddit_median_score`, `subreddit_median_comments`
+- NLP sentiment (VADER UDF): `title_sentiment`, `selftext_sentiment`
+
+**MLlib Pipeline:** Imputer (mean, `selftext_sentiment` only) → StringIndexer → VectorAssembler → StandardScaler (fit on train only)
+
+**Train/Val/Test Split (temporal):**
+
+| Split | Years | Rows |
+|---|---|---|
+| Train | 2012–2016 | 276,442,594 |
+| Val | 2017 | 114,089,205 |
+| Test | 2018 | 144,949,019 |
+
+### SparkSession Configuration (Milestone 3)
+
+Driver memory was increased to 120GB to accommodate the full dataset pipeline. All execution runs in `local[*]` mode with 16 cores as parallel thread slots within a single JVM.
+
+```python
+spark = SparkSession.builder \
+    .appName("PushshiftRedditPreprocessing") \
+    .master("local[*]") \
+    .config("spark.driver.memory", "120g") \
+    .config("spark.driver.maxResultSize", "8g") \
+    .config("spark.sql.shuffle.partitions", "200") \
+    .config("spark.sql.parquet.enableVectorizedReader", "true") \
+    .config("spark.local.dir", "/expanse/lustre/projects/uci157/ekim18/spark-tmp") \
+    .getOrCreate()
+```
+
+### Spark UI — Distributed Execution
+
+Training used 16 Spark workers with `SparkXGBClassifier`, confirmed via the Spark REST API executor summary:
+
+| id | totalCores | maxMemory | activeTasks | isActive | maxMemory_GB |
+|---|---|---|---|---|---|
+| driver | 16 | 77,120,667,648 | 0 | True | 71.82 |
+
+Spark master: `local[*]`
+
+### Model Training
+
+We trained two XGBoost configurations (`SparkXGBClassifier`, XGBoost 2.0.3) on both the 4-class and binary label tasks so four models total. All models were trained on the full 276M row training split with 16 workers and 16 partitions (~17M rows per worker).
+
+**Config A — Conservative (shallow, regularized):**
+
+| Parameter | Value |
+|---|---|
+| `max_depth` | 4 |
+| `n_estimators` | 200 |
+| `learning_rate` | 0.05 |
+| `subsample` | 0.8 |
+| `colsample_bytree` | 0.8 |
+| `reg_lambda` | 5.0 |
+| `reg_alpha` | 1.0 |
+| `min_child_weight` | 50 |
+
+**Config B — Aggressive (deep, fast learning):**
+
+| Parameter | Value |
+|---|---|
+| `max_depth` | 8 |
+| `n_estimators` | 300 |
+| `learning_rate` | 0.1 |
+| `subsample` | 0.7 |
+| `colsample_bytree` | 0.7 |
+| `reg_lambda` | 1.0 |
+| `reg_alpha` | 0.0 |
+| `min_child_weight` | 10 |
+
+**Training Times:**
+
+| Model | Config A | Config B |
+|---|---|---|
+| 4-Class | 3,610.9s (~1hr) | 7,059.0s (~2hrs) |
+| Binary | ~3,600s (~1hr) | ~7,200s (~2hrs) |
+
+### Evaluation Results
+
+**4-Class Weighted F1:**
+
+| Config | Train | Val | Test |
+|---|---|---|---|
+| Config A | 0.5283 | 0.5759 | 0.5689 |
+| Config B | 0.5767 | 0.6089 | 0.5866 |
+
+**Binary Weighted F1:**
+
+| Config | Train | Val | Test |
+|---|---|---|---|
+| Config A | 0.7087 | 0.7435 | 0.7280 |
+| Config B | 0.7375 | 0.7642 | 0.7440 |
+
+**4-Class vs Binary Comparison (Test Weighted F1):**
+
+| Config | 4-Class WF1 | Binary WF1 | Delta |
+|---|---|---|---|
+| Config A | 0.5689 | 0.7280 | +0.1590 |
+| Config B | 0.5866 | 0.7440 | +0.1574 |
+
+### Fitting Analysis
+
+![Fitting Analysis](outputs/figures/xgboost_fitting_analysis.png)
+
+Both models sit firmly in the underfitting region of the bias-variance spectrum. Train F1 is consistently lower than val and test F1 across all configurations and both label tasks which is the opposite of the overfitting pattern. This is probably driven by a temporal shift: the 2012–2016 training set covers Reddit's noisy early growth phase, while the 2017 val and 2018 test sets represent a more behaviorally stable platform where posting patterns are more consistent and predictable.
+
+Config B outperforms Config A across every split and both tasks. The deeper trees and faster learning rate allow Config B to capture more complex feature interactions, particularly the relationship between subreddit-level aggregates and engagement thresholds.
+
+### Feature Importance
+
+![4-Class Feature Importance](outputs/figures/xgboost_4class_feature_importance.png)
+
+![Binary Feature Importance](outputs/figures/xgboost_binary_feature_importance.png)
+
+Community and author context features dominate both tasks with our current feature set. `subreddit_post_count`, `author_mean_score`, and `author_post_count` are the top three features in every configuration. This implies knowing which community a post belongs to and the historical track record of its author is far more predictive than any structural property of the post itself. `has_question` and `has_exclamation` contribute zero weight in Config A across both label tasks and are candidates for removal in Milestone 4.
+
+### Speedup Analysis
+
+The VADER selftext sentiment UDF applied to 535,480,818 rows was used as the representative distributed operation for speedup measurement.
+
+| Executors | Time (sec) | Speedup | Efficiency |
+|---|---|---|---|
+| 1 | 25,914 (estimated) | 1.00x | 100% |
+| 16 | 2,308 | 11.23x | 70.2% |
+
+**Speedup** = T₁ / T₁₆ = 25,914 / 2,308 = **11.23x**
+
+**Efficiency** = 11.23 / 16 = **70.2%**
+
+Using Amdahl's Law, the implied parallel fraction is approximately 96.4%, with the remaining ~3.6% serial fraction corresponding to task scheduling overhead, Python UDF initialization, and VADER analyzer instantiation per partition. The single-thread baseline is estimated from a 10,000-row benchmark sample extrapolated to the full dataset. Running the full pipeline single-threaded would require approximately 7 hours of wall time beyond the project's time constraints. 
+
+### Conclusion
+
+The 4-class XGBoost models demonstrate that Reddit engagement archetypes are meaningfully predictable from pre-publication features, achieving a test weighted F1 of 0.5866 (Config B) on a 4-class problem across 102,739 subreddits using only 19 features. Both models underfit due to a hard ceiling imposed by the pre-publication feature set. Without access to post content, the model cannot distinguish crowd-pleaser from debate-starter posts reliably, as reflected in the low per-class F1 scores for these minority classes (0.33–0.38 on test). The binary task confirms that the high/low engagement distinction is substantially more learnable from these features, achieving 0.7440 test WF1, showing consistent ~0.16 point lift over the 4-class task across all configurations.
+
+**Improvements for Milestone 4:** Incorporating Word2Vec title embeddings to add semantic content signal, removing zero-weight features (`has_question`, `has_exclamation`), and potentially exploring LightGBM as an alternative to XGBoost given its faster training on large datasets. A neural net model could be explored too. 
+
+**How distributed computing helped:** The preprocessing pipeline involved per-author and per-subreddit aggregations, VADER sentiment UDF, and StandardScaler fit, all on 535M rows and exceeds single-machine memory capacity. Spark's distributed execution achieved an 11.23x speedup over single-thread baseline. Model training itself used 16 parallel XGBoost workers via `SparkXGBClassifier`, reducing training time to ~1–2 hours per model compared to an estimated 16+ hours single-threaded.
+
 ## Results
 
 *To be completed.*
