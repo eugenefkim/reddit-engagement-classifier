@@ -241,11 +241,7 @@ spark = SparkSession.builder \
 
 Training used 16 Spark workers with `SparkXGBClassifier`, confirmed via the Spark REST API executor summary:
 
-| id | totalCores | maxMemory | activeTasks | isActive | maxMemory_GB |
-|---|---|---|---|---|---|
-| driver | 16 | 77,120,667,648 | 0 | True | 71.82 |
-
-Spark master: `local[*]`
+<img width="1012" height="401" alt="image" src="https://github.com/user-attachments/assets/dd406292-4d30-4a1f-b413-b7de4a16f6e8" />
 
 ### Preprocessing Pipeline (Milestone 3)
 
