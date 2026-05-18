@@ -61,9 +61,9 @@ To download the data, open and run the [`notebooks/data_download.ipynb`](noteboo
 
 The dataset is downloaded into `data/raw/`, approximately 89GB of 218 Parquet files. The notebook loads data directly from `data/raw/` using a relative path.
 
-### SDSC Expanse Setup and SparkSession Configuration
+### SDSC Expanse Setup and SparkSession Configuration (Milestone 2)
 
-#### Current Configuration (Local Mode)
+#### Milestone 2 SparkSession Configuration 
 
 The Expanse JupyterLab portal launches Spark inside a Singularity container which defaults to `local[*]` mode. This means there is no separate cluster manager and no worker processes and all driver coordination and task execution run in a single JVM, using the node's 16 cores as parallel thread slots. Parallelism is still achieved, but it is thread-based within one JVM rather than distributed across separate executor processes. As a result, executor configuration parameters are set but not active, and the Spark UI shows a single executor row. We also allocate 8GB to driver memory account for this.
 
@@ -82,32 +82,10 @@ spark = SparkSession.builder \
     .getOrCreate()
 ```
 
-#### SparkUI Screenshot
+#### SparkUI Screenshot (Milestone 2)
 <img width="853" height="423" alt="SparkUI_Screenshot_Local" src="https://github.com/user-attachments/assets/42f747a7-9c31-4201-8586-89919649a849" />
 
-#### Proposed Distributed Configuration (Milestone 3)
-
-Per instructor recommendation and the Spark HPC Best Practices guide, the configuration will be updated once true distributed mode is available. Driver memory is reduced to 2GB since the driver only coordinates tasks and does not process data directly. Executor instances are set to 15 (16 total cores - 1 reserved for the driver), with executor memory calculated as `(128 - 2) / 15 ≈ 8GB` each. This maximizes memory available for the heavy per-author and per-subreddit aggregations the Milestone 3 pipeline requires.
-
-```python
-from pyspark.sql import SparkSession
-
-# 16 cores, 128GB total memory
-# Driver memory: 2GB (coordinates tasks only, does not process data)
-# Executor instances: 16 cores - 1 (driver) = 15
-# Executor memory: (128 - 2) / 15 ≈ 8GB
-spark = SparkSession.builder \
-    .appName("PushshiftRedditPipeline") \
-    .config("spark.driver.memory", "2g") \
-    .config("spark.driver.maxResultSize", "4g") \
-    .config("spark.executor.memory", "8g") \
-    .config("spark.executor.instances", "15") \
-    .config("spark.sql.shuffle.partitions", "200") \
-    .config("spark.sql.parquet.enableVectorizedReader", "true") \
-    .getOrCreate()
-```
-
-## Notebook
+## Notebook (Milestone 2)
 
 The Milestone 2 EDA and data exploration notebook is located at: [`notebooks/Milestone2_Pushshift.ipynb`](notebooks/Milestone2_Pushshift.ipynb)
 
@@ -240,11 +218,36 @@ All features will be derived from pre-publication information only to prevent da
 
 ## Milestone 3 — Preprocessing and XGBoost Model Fitting (4-Class and Binary)
 
-### Notebook
+### Notebook (Milestone 3)
 
 The Milestone 3 preprocessing and model fitting notebook is located at: [`notebooks/Milestone3_Pushshift.ipynb`](notebooks/Milestone3_Pushshift.ipynb)
 
-### Preprocessing Pipeline
+### SparkSession Configuration (Milestone 3)
+
+Driver memory was increased to 120GB to accommodate the full dataset pipeline. All execution runs in `local[*]` mode with 16 cores as parallel thread slots within a single JVM. Spark local spill directory was redirected to Lustre to account for the expensive computations that come with processing 535M rows using heavy aggregations.
+
+```python
+spark = SparkSession.builder \
+    .appName("PushshiftRedditPreprocessing") \
+    .config("spark.driver.memory", "120g") \
+    .config("spark.driver.maxResultSize", "8g") \
+    .config("spark.sql.shuffle.partitions", "200") \
+    .config("spark.sql.parquet.enableVectorizedReader", "true") \
+    .config("spark.local.dir", "/expanse/lustre/projects/uci157/ekim18/spark-tmp") \
+    .getOrCreate()
+```
+
+### SparkUI Screenshot (Milestone 3)
+
+Training used 16 Spark workers with `SparkXGBClassifier`, confirmed via the Spark REST API executor summary:
+
+| id | totalCores | maxMemory | activeTasks | isActive | maxMemory_GB |
+|---|---|---|---|---|---|
+| driver | 16 | 77,120,667,648 | 0 | True | 71.82 |
+
+Spark master: `local[*]`
+
+### Preprocessing Pipeline (Milestone 3)
 
 All preprocessing was implemented using Spark DataFrame operations and Spark MLlib transformers on the full 535,480,818 row filtered dataset on SDSC Expanse.
 
@@ -255,7 +258,7 @@ All preprocessing was implemented using Spark DataFrame operations and Spark MLl
 | Null `subreddit` / `subreddit_id` | ~306,479 | Cannot contribute to per-subreddit features |
 | Null `score` | 21 | Required for label generation |
 | Negative `num_comments` | 1,090 | Pushshift artifact, value unverifiable |
-| Duplicate `ID` | 0 | Only 1 duplicate row existed and removal was not worth the compute |
+| Duplicate `id` | 0 | Only 1 duplicate row existed and removal was not worth the compute |
 
 **Label Generation:**
 Per-subreddit 75th percentile thresholds on `score` and `num_comments` were computed using `Window.partitionBy()` and `percentile_approx()` to assign four engagement archetypes. A binary high/low label was also generated for comparison. StringIndexer was applied to both label columns.
@@ -293,33 +296,7 @@ Per-subreddit 75th percentile thresholds on `score` and `num_comments` were comp
 | Val | 2017 | 114,089,205 |
 | Test | 2018 | 144,949,019 |
 
-### SparkSession Configuration (Milestone 3)
-
-Driver memory was increased to 120GB to accommodate the full dataset pipeline. All execution runs in `local[*]` mode with 16 cores as parallel thread slots within a single JVM.
-
-```python
-spark = SparkSession.builder \
-    .appName("PushshiftRedditPreprocessing") \
-    .master("local[*]") \
-    .config("spark.driver.memory", "120g") \
-    .config("spark.driver.maxResultSize", "8g") \
-    .config("spark.sql.shuffle.partitions", "200") \
-    .config("spark.sql.parquet.enableVectorizedReader", "true") \
-    .config("spark.local.dir", "/expanse/lustre/projects/uci157/ekim18/spark-tmp") \
-    .getOrCreate()
-```
-
-### Spark UI — Distributed Execution
-
-Training used 16 Spark workers with `SparkXGBClassifier`, confirmed via the Spark REST API executor summary:
-
-| id | totalCores | maxMemory | activeTasks | isActive | maxMemory_GB |
-|---|---|---|---|---|---|
-| driver | 16 | 77,120,667,648 | 0 | True | 71.82 |
-
-Spark master: `local[*]`
-
-### Model Training
+### Model Training (Milestone 3)
 
 We trained two XGBoost configurations (`SparkXGBClassifier`, XGBoost 2.0.3) on both the 4-class and binary label tasks so four models total. All models were trained on the full 276M row training split with 16 workers and 16 partitions (~17M rows per worker).
 
@@ -356,7 +333,7 @@ We trained two XGBoost configurations (`SparkXGBClassifier`, XGBoost 2.0.3) on b
 | 4-Class | 3,610.9s (~1hr) | 7,059.0s (~2hrs) |
 | Binary | ~3,600s (~1hr) | ~7,200s (~2hrs) |
 
-### Evaluation Results
+### Model Evaluation Results (Milestone 3)
 
 **4-Class Weighted F1:**
 
@@ -379,7 +356,7 @@ We trained two XGBoost configurations (`SparkXGBClassifier`, XGBoost 2.0.3) on b
 | Config A | 0.5689 | 0.7280 | +0.1590 |
 | Config B | 0.5866 | 0.7440 | +0.1574 |
 
-### Fitting Analysis
+### Model Fitting Analysis (Milestone 3)
 
 ![Fitting Analysis](outputs/figures/xgboost_fitting_analysis.png)
 
@@ -387,7 +364,7 @@ Both models sit firmly in the underfitting region of the bias-variance spectrum.
 
 Config B outperforms Config A across every split and both tasks. The deeper trees and faster learning rate allow Config B to capture more complex feature interactions, particularly the relationship between subreddit-level aggregates and engagement thresholds.
 
-### Feature Importance
+### Feature Importance (Milestone 3)
 
 ![4-Class Feature Importance](outputs/figures/xgboost_4class_feature_importance.png)
 
@@ -395,7 +372,7 @@ Config B outperforms Config A across every split and both tasks. The deeper tree
 
 Community and author context features dominate both tasks with our current feature set. `subreddit_post_count`, `author_mean_score`, and `author_post_count` are the top three features in every configuration. This implies knowing which community a post belongs to and the historical track record of its author is far more predictive than any structural property of the post itself. `has_question` and `has_exclamation` contribute zero weight in Config A across both label tasks and are candidates for removal in Milestone 4.
 
-### Speedup Analysis
+### Speedup Analysis (Milestone 3)
 
 The VADER selftext sentiment UDF applied to 535,480,818 rows was used as the representative distributed operation for speedup measurement.
 
@@ -410,7 +387,7 @@ The VADER selftext sentiment UDF applied to 535,480,818 rows was used as the rep
 
 Using Amdahl's Law, the implied parallel fraction is approximately 96.4%, with the remaining ~3.6% serial fraction corresponding to task scheduling overhead, Python UDF initialization, and VADER analyzer instantiation per partition. The single-thread baseline is estimated from a 10,000-row benchmark sample extrapolated to the full dataset. Running the full pipeline single-threaded would require approximately 7 hours of wall time beyond the project's time constraints. 
 
-### Conclusion
+### Conclusion (Milestone 3)
 
 The 4-class XGBoost models demonstrate that Reddit engagement archetypes are meaningfully predictable from pre-publication features, achieving a test weighted F1 of 0.5866 (Config B) on a 4-class problem across 102,739 subreddits using only 19 features. Both models underfit due to a hard ceiling imposed by the pre-publication feature set. Without access to post content, the model cannot distinguish crowd-pleaser from debate-starter posts reliably, as reflected in the low per-class F1 scores for these minority classes (0.33–0.38 on test). The binary task confirms that the high/low engagement distinction is substantially more learnable from these features, achieving 0.7440 test WF1, showing consistent ~0.16 point lift over the 4-class task across all configurations.
 
