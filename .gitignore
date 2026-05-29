@@ -248,3 +248,4 @@ metastore_db/
 *.out
 *.err
 slurm-*.out
+models/
