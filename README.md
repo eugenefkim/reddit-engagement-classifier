@@ -576,6 +576,19 @@ Title structural features (length, number presence, sentiment via VADER UDF), po
 A stratified split with train (276M rows), validation (114M rows), and test (145M rows).
 
 
+### Model 1: Distributed XGBoost on Structured Features
+
+`SparkXGBClassifier` (XGBoost 2.0.3) was trained on the full 276M-row training split. Two configurations were trained on both the 4-class and binary tasks (four models total):
+
+**Config A (conservative):** `max_depth=4`, `n_estimators=200`, `learning_rate=0.05`, `subsample=0.8`, `colsample_bytree=0.8`, `reg_lambda=5.0`, `reg_alpha=1.0`, `min_child_weight=50`
+
+**Config B (aggressive):** `max_depth=8`, `n_estimators=300`, `learning_rate=0.1`, `subsample=0.7`, `colsample_bytree=0.7`, `reg_lambda=1.0`, `reg_alpha=0.0`, `min_child_weight=10`
+
+Inverse-frequency class weights were applied via `weightCol`. Training took ~1 hour (Config A) and ~2 hours (Config B) per task.
+
+Notably, the training data here was only our structural data and did not include any TF-IDF or other NLP methods.
+
+
 ### Final Model: Truncated SVD (LSA) + Logistic Regression
 
 **TF-IDF:** A 10,000-dimensional TF-IDF representation of post titles was constructed using `HashingTF` + `IDF`, fit on training only and applied to all three splits.
@@ -588,6 +601,35 @@ A stratified split with train (276M rows), validation (114M rows), and test (145
 
 
 ## Results
+
+
+### Model 1 Results: XGBoost on Structured Features
+
+**4-Class Weighted F1:**
+
+| Config | Train | Val | Test |
+|---|---|---|---|
+| Config A | 0.5283 | 0.5759 | 0.5689 |
+| Config B | 0.5767 | 0.6089 | 0.5866 |
+
+**Binary Weighted F1:**
+
+| Config | Train | Val | Test |
+|---|---|---|---|
+| Config A | 0.7087 | 0.7435 | 0.7280 |
+| Config B | 0.7375 | 0.7642 | 0.7440 |
+
+Our first approach consistently had lower train F1 score than the validation and test splits. Feature importance is dominated by `subreddit_post_count`, `author_mean_score`, and `author_post_count`; `has_question` and `has_exclamation` contribute zero weight in Config A.
+
+![XGBoost Fitting Analysis](outputs/figures/xgboost_fitting_analysis.png)
+
+![4-Class Feature Importance](outputs/figures/xgboost_4class_feature_importance.png)
+
+![Binary Feature Importance](outputs/figures/xgboost_binary_feature_importance.png)
+
+
+
+### Final Model Results: SVD + Logistic Regression
 
 **Explained Frobenius energy:**
 
@@ -627,6 +669,9 @@ Per-class breakdown for lr_4class_B on the test split: low-engagement is the bes
 
 ## Discussion
 
+**Lack of power of first model**
+The first model we created was lacking in F1 score, largely due to the lack of signal from the text data. We attempted to do predictions based off of the meta-data from the posts as well as a quick sentiment score. The poor performance of the first model led us to our final model incorporating TF-IDF.
+
 **Explained energy vs. predictive signal.** 
 The SVD retains only 7.9% of total Frobenius energy at k=100. This initially seems discouraging, but the downstream logistic regression results demonstrate that retained energy and retained predictive signal are distinct quantities: the 100-component representation, concatenated with structured features, improves over the structured-only baseline on both tasks. Further research could be done to see the lift of additional dimensionality for the SVD step.
 
@@ -638,9 +683,7 @@ The model sits on the underfitting side for the 4-class task and near balanced f
 
 ## Conclusion
 
-This project demonstrates that Reddit engagement archetypes are meaningfully predictable from pre-publication features, especially at the binary (high engagement vs low engagement) level. At further granularity it becomes obvious that richer context is required for effective modeling. 
-
-With more time and resources we would attempt replacing HashingTF with CountVectorizer which would allow for greater interpretability. Additionally, we'd want to increate the SVD rank to k = 500 or k = 1000 on a true multi-node cluster rather than a local model.
+This project demonstrates that Reddit engagement archetypes are meaningfully predictable from pre-publication features, especially at the binary (high engagement vs low engagement) level. At further granularity it becomes obvious that richer context is required for effective modeling. We learned that distributed computing allowed us to work with data that would have otherwise been impossible. The ability to do analysis across hundreds of millions of rows of data would be highly inefficient or impossible on a single machine. The caveat to this is that the Spark framework was prone to out of memory errors and kernel failures. So we often had to revisit our approaches to better fit the distributed system, focusing on delegating processes into smaller pieces that wouldn't overwhelm the distributed system. With more time and resources we would attempt replacing HashingTF with CountVectorizer which would allow for greater interpretability. Additionally, we'd want to increate the SVD rank to k = 500 or k = 1000 on a true multi-node cluster rather than a local model.
 
 
 
@@ -650,7 +693,7 @@ With more time and resources we would attempt replacing HashingTF with CountVect
 | Member | Contributions |
 |---|---|
 | Eugene Kim | *To be completed* |
-| Jack Keeton | *To be completed* |
+| Jack Keeton | Led development for data ingestion and initial exploration (Milestone 2). Aided efforts in feature engineering and tested the application of word embeddings. Developed GBT Classifier alternative for final model.|
 | Aidan Sanchez | *To be completed* |
 
 ## References
