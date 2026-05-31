@@ -2,24 +2,6 @@
 
 Distributed PySpark ML pipeline that classifies Reddit post engagement archetypes (viral, crowd-pleaser, debate-starter, low-engagement) using NLP feature engineering on 89GB of Pushshift Reddit data.
 
-## Abstract
-
-Social media platforms face a critical challenge in predicting how content will engage their communities. Not just whether a post will be popular, but what kind of engagement it will receive. A post that attracts thousands of upvotes but yields no comment discussion serves a fundamentally different role than one that sparks hundreds of comments but remains controversial in score (whether it be likes, reddit votes, etc.), yet most engagement prediction approaches collapse these distinct outcomes into a single metric. This project uses the Pushshift Reddit Submissions Dataset, a public archive of Reddit posts hosted on HuggingFace, totaling approximately 89 GB and containing over 549 million submissions. We propose a multiclass classification pipeline in PySpark that predicts a post's engagement archetype (viral, crowd-pleaser, debate-starter, or low-engagement) using pre-publication features derived from title linguistics, author posting history, subreddit context, and temporal patterns. Class boundaries are defined using per-subreddit quantiles of score and comment count to account for the vastly different engagement norms across communities. This analysis requires distributed processing because constructing per-author behavioral features across hundreds of millions of posts, computing per-subreddit engagement baselines, and performing temporal aggregations exceed the memory and compute capacity of a single machine.
-
-## Introduction
-
-Reddit is one of the largest social platforms in the world, organized into thousands of distinct communities (subreddits) each with their own norms, audiences, and engagement patterns. Understanding what drives post engagement has practical implications for content moderation, platform health, and proactive resource allocation, particularly for identifying posts likely to generate contentious or high-volume discussion before comments arrive.
-
-Existing work on social media engagement prediction typically frames the problem as binary (popular vs. not) or as a regression over raw vote counts. This conflates qualitatively different engagement outcomes: a post can accumulate high scores with minimal discussion, or generate extensive debate while remaining score-neutral or negative. We argue that a further segmented engagement archetype derived from the joint distribution of score and comment volume relative to community norms is a more meaningful and actionable prediction target than a simple high vs. low engagement model. Our project seeks to gain further classification insight from the juxtaposition of our proposed four-tier class model to a standard two-tier class model.
-
-We define four engagement archetypes:
-- **Viral**: high score, high comments — broadly appealing and discussion-generating
-- **Crowd-pleaser**: high score, low comments — well-received but not discussion-driving
-- **Debate-starter**: low score, high comments — controversial or polarizing content
-- **Low-engagement**: low score, low comments — did not resonate with the community
-
-Class boundaries are assigned using per-subreddit quantile thresholds rather than global thresholds, accounting for the fact that 100 comments is unremarkable in r/AskReddit but exceptional in a small niche subreddit. 
-
 ## Dataset
 
 **Source:** [Pushshift Reddit Submissions Dataset](https://huggingface.co/datasets/fddemarco/pushshift-reddit)  
@@ -61,6 +43,7 @@ To download the data, open and run the [`notebooks/data_download.ipynb`](noteboo
 
 The dataset is downloaded into `data/raw/`, approximately 89GB of 218 Parquet files. The notebook loads data directly from `data/raw/` using a relative path.
 
+
 ### SDSC Expanse Setup and SparkSession Configuration (Milestone 2)
 
 #### Milestone 2 SparkSession Configuration 
@@ -100,16 +83,16 @@ Dataset descriptions were provided above in the `Dataset` section but are descri
 #### Categorical Columns
 
 - **`id`** (string): Unique post identifier. Approximately 550M distinct values with only 1 duplicate found across the full dataset, confirming near-perfect uniqueness. Not used as a model feature.
-- **`author`** (string): Reddit username of the poster. ~35.4M distinct users. Heavily skewed — the top authors are bots and aggregator accounts (`AutoNewsAdmin`, `AutoNewspaperAdmin`, `politicbot`, etc.) responsible for millions of posts each. ~13.3% of posts have `[deleted]` authors and ~5.5% have empty string authors. Not directly encoded as a feature; represented through author history aggregations.
-- **`subreddit`** (string): Community the post was submitted to. ~2.3M distinct subreddits. Extremely long-tailed — r/AskReddit alone accounts for ~13.5M posts while the vast majority of subreddits have very few. Not directly encoded; represented through per-subreddit aggregation features.
+- **`author`** (string): Reddit username of the poster. ~35.4M distinct users. Heavily skewed the top authors are bots and aggregator accounts (`AutoNewsAdmin`, `AutoNewspaperAdmin`, `politicbot`, etc.) responsible for millions of posts each. ~13.3% of posts have `[deleted]` authors and ~5.5% have empty string authors. Not directly encoded as a feature; represented through author history aggregations.
+- **`subreddit`** (string): Community the post was submitted to. ~2.3M distinct subreddits. Extremely long-tailed r/AskReddit alone accounts for ~13.5M posts while the vast majority of subreddits have very few. Not directly encoded; represented through per-subreddit aggregation features.
 - **`subreddit_id`** (string): Internal Reddit identifier for the subreddit. ~2.2M distinct values, closely tracking `subreddit` cardinality. Used for deduplication and join purposes only.
-- **`selftext`** (string): Post body text. 72.8% of posts have empty selftext, indicating link or image posts with no body. The remaining 27.2% are text posts. No null or sentinel string values present in this version of the dataset — absence is encoded as an empty string. Represented as a binary `is_text_post` flag and selftext character length in modeling.
+- **`selftext`** (string): Post body text. 72.8% of posts have empty selftext, indicating link or image posts with no body. The remaining 27.2% are text posts. No null or sentinel string values present in this version of the dataset absence is encoded as an empty string. Represented as a binary `is_text_post` flag and selftext character length in modeling.
 - **`title`** (string): Post title text. Present for all 549M rows. Mean length ~50 characters, std dev ~37, max 1,592 characters. Used as the primary source of NLP features (word count, sentiment, readability, question/exclamation presence).
 
 #### Continuous Columns
 
-- **`score`** (long): Net upvotes at time of archival. Range: 0 to 270,469. Mean: 44.84, std dev: 707.38 — extremely right-skewed. The vast majority of posts score in the single digits while a small number go viral. Median is consistently far below mean in every year. One of the two **target label inputs**.
-- **`num_comments`** (long): Comment count at time of archival. Range: -117 to 517,003. Mean: 8.36, std dev: 93.11 — similarly right-skewed. Negative values are a known Pushshift artifact and will be treated as 0. The other **target label input**.
+- **`score`** (long): Net upvotes at time of archival. Range: 0 to 270,469. Mean: 44.84, std dev: 707.38 extremely right-skewed. The vast majority of posts score in the single digits while a small number go viral. Median is consistently far below mean in every year. One of the two **target label inputs**.
+- **`num_comments`** (long): Comment count at time of archival. Range: -117 to 517,003. Mean: 8.36, std dev: 93.11 similarly right-skewed. Negative values are a known Pushshift artifact and will be treated as 0. The other **target label input**.
 - **`created_utc`** (long): Unix timestamp of post creation. Spans January 1, 2012 to December 31, 2018. Used to extract temporal features (hour of day, day of week) and for train/test splitting. Post volume shows a clear weekday peak (Mon–Thu) and grows steadily year over year across the dataset's coverage window.
 
 #### Target Column
@@ -178,7 +161,7 @@ Preprocessing will be implemented in Milestone 3 using PySpark DataFrame operati
 
 ### Missing Values
 - `title`: Rows with zero-length titles will be dropped as they contain no usable signal.
-- `selftext`: Empty strings indicate link posts and are valid — they will be flagged via a binary `is_text_post` indicator column rather than treated as missing.
+- `selftext`: Empty strings indicate link posts and are valid they will be flagged via a binary `is_text_post` indicator column rather than treated as missing.
 - `author`: Rows with `[deleted]` or empty string authors will be filtered out as they cannot contribute to author history features. Authors posting at an inhuman frequency (above a defined daily post threshold) will be flagged as suspected bots and considered for removal.
 - `subreddit` / `subreddit_id`: The ~306K null rows discovered in EDA will be dropped as they cannot contribute to per-subreddit features.
 - `score` / `num_comments`: The 21 null score rows will be dropped. Negative `num_comments` values (-117 minimum) are a known Pushshift artifact and will be clipped to 0.
@@ -195,15 +178,15 @@ Labels will be assigned using `pyspark.sql.Window` functions to compute per-subr
 ### Feature Engineering
 All features will be derived from pre-publication information only to prevent data leakage. Transformations include:
 
-- **Title features**: character count, word count, question/exclamation presence, sentiment polarity, readability — extracted using PySpark UDFs wrapping NLTK/TextBlob
+- **Title features**: character count, word count, question/exclamation presence, sentiment polarity, readability extracted using PySpark UDFs wrapping NLTK/TextBlob
 - **Post type**: binary `is_text_post` flag derived from `selftext`; selftext character length for text posts
-- **Author history**: mean score, posting frequency, subreddit diversity — computed via `groupBy().agg()` aggregations across the full dataset
-- **Subreddit context**: post volume, median score, median comment count — computed via `groupBy().agg()` per subreddit
+- **Author history**: mean score, posting frequency, subreddit diversity computed via `groupBy().agg()` aggregations across the full dataset
+- **Subreddit context**: post volume, median score, median comment count computed via `groupBy().agg()` per subreddit
 - **Temporal**: hour of day and day of week extracted from `created_utc` via `pyspark.sql.functions.from_unixtime`
 
 ### Scaling and Encoding
 - All continuous features will be standardized using MLlib's `StandardScaler`
-- Categorical features (`subreddit`, `author`) will not be directly one-hot encoded due to high cardinality (millions of unique authors, hundreds of thousands of subreddits). Each is represented through aggregated numerical features — author history features for `author` and community context features for `subreddit`
+- Categorical features (`subreddit`, `author`) will not be directly one-hot encoded due to high cardinality (millions of unique authors, hundreds of thousands of subreddits). Each is represented through aggregated numerical features author history features for `author` and community context features for `subreddit`
 - The final feature vector will be assembled using MLlib's `VectorAssembler`
 
 ### Key PySpark Operations
@@ -391,13 +374,276 @@ The 4-class XGBoost models demonstrate that Reddit engagement archetypes are mea
 
 **How distributed computing helped:** The preprocessing pipeline involved per-author and per-subreddit aggregations, VADER sentiment UDF, and StandardScaler fit, all on 535M rows and exceeds single-machine memory capacity. Spark's distributed execution achieved an 11.23x speedup over single-thread baseline. Model training itself used 16 parallel XGBoost workers via `SparkXGBClassifier`, reducing training time to ~1–2 hours per model compared to an estimated 16+ hours single-threaded.
 
+
+
+## Milestone 4 — Dimensionality Reduction (SVD/LSA) and Logistic Regression
+
+
+### Overview
+
+Milestone 3 established that test performance is structurally bounded: roughly 48.6% of the 2018 test set consists of authors with no training-period history, so the author/subreddit aggregate features that dominate the baseline carry no signal for nearly half of test. Content-derived features are then our focus for Milestone 4.
+
+This milestone reduces that sparse data created by TF-IDF frwith **Truncated SVD**, the standard form of **Latent Semantic Analysis (LSA)** for TF-IDF, then trains logistic regression models on the resulting combined feature vector.
+
+### SparkSession Configuration (Milestone 4)
+
+```python
+spark = SparkSession.builder \
+    .appName("PushshiftRedditSVD") \
+    .master("local[*]") \
+    .config("spark.driver.memory", "120g") \
+    .config("spark.driver.maxResultSize", "8g") \
+    .config("spark.sql.shuffle.partitions", "200") \
+    .config("spark.sql.parquet.enableVectorizedReader", "true") \
+    .config("spark.local.dir", "/expanse/lustre/projects/uci157/ekim18/spark-tmp") \
+    .getOrCreate()
+```
+
+### TF-IDF Feature Engineering
+
+A 10,000-dimensional TF-IDF representation of post titles was constructed using `pyspark.ml.feature.HashingTF` + `IDF`, fit on the training split only and applied to all three splits.
+
+### Truncated SVD (Latent Semantic Analysis)
+
+`pyspark.mllib.linalg.distributed.RowMatrix.computeSVD` was used rather than `pyspark.ml.feature.PCA` deliberately: PCA mean-centers the matrix, which turns every structural zero into a nonzero entry and is much tougher on memory. LSA preserves sparsity.
+
+```python
+from pyspark.mllib.linalg import Vectors as MLLibVectors
+from pyspark.mllib.linalg.distributed import RowMatrix
+
+K = 100
+N_HASH_FEATURES = 10000
+
+# Convert ml.linalg.SparseVector -> mllib.linalg.Vector (sparsity-preserving bridge)
+train_rows = (
+    train_sample
+    .select("title_tfidf")
+    .rdd
+    .map(lambda r: MLLibVectors.fromML(r.title_tfidf))
+).persist(StorageLevel.MEMORY_AND_DISK)
+
+mat = RowMatrix(train_rows, numRows=n_train, numCols=N_HASH_FEATURES)
+
+# computeU=False: only V (10000 x k, local) and s needed for projection
+svd = mat.computeSVD(K, computeU=False)
+```
+
+The SVD was fit on a ~2M-row subsample of the training split. The full 83M-row fit was extrapolated at ~33 , not viable before submission, so the subsample fit serves as the production SVD: the leading singular directions of a 10k TF-IDF space stabilize well below the full row count. `V` (10,000 × 100) and `s` (100 singular values) were persisted to `../models/svd_title_k100_v2/`.
+
+**Explained energy results:** The singular values are nearly flat after the first component (σ₁ = 1,244; components 2–100 ≈ 550–880). Cumulative explained energy reaches 7.9% at k=100, rising almost linearly across the retained range with no elbow.
+
+![SVD Explained Energy](outputs/figures/svd_explained_energy.png)
+
+### SVD Transform
+
+Each split's `title_tfidf` vector was projected into the 100-dimensional SVD subspace via a broadcast UDF operating only over nonzero indices:
+
+```python
+V_bc = spark.sparkContext.broadcast(svd.V.toArray().astype(np.float32))  # 10000 x 100
+
+@F.udf(VectorUDT())
+def project(v):
+    out = np.zeros(100, dtype=np.float32)
+    Vmat = V_bc.value
+    for idx, val in zip(v.indices, v.values):
+        out += val * Vmat[idx]
+    return Vectors.dense(out)
+
+for name, df in {"train": train_tfidf, "val": val_tfidf, "test": test_tfidf}.items():
+    df.withColumn("svd_features", project("title_tfidf")) \
+      .drop("title_tfidf") \
+      .write.mode("overwrite").parquet(OUT[name])
+```
+
+### Feature Assembly (117-dim vector)
+
+Logistic regression cannot handle the NaN cold-start aggregates that XGBoost managed natively. The five nullable aggregate features were median-imputed (Imputer fit on train only); `is_new_author` / `is_new_subreddit` flags mark imputed rows. Four zero-importance structural features (`has_title`, `has_question`, `has_exclamation`, `title_is_allcaps`) identified in M3 were dropped.
+
+Final vector: **12 row-local structured + 5 imputed aggregates + 100 SVD components = 117 dimensions**
+
+```python
+from pyspark.ml.feature import Imputer, VectorAssembler
+
+AGG    = ["author_post_count","author_mean_score","subreddit_post_count",
+          "subreddit_median_score","subreddit_median_comments"]
+NONAGG = ["title_len","title_has_number","is_text_post","selftext_len",
+          "hour_of_day","day_of_week","is_known_bot","is_anonymous_author",
+          "is_new_author","is_new_subreddit","title_sentiment","selftext_sentiment"]
+
+imputer = Imputer(strategy="median", inputCols=AGG,
+                  outputCols=[c+"_imp" for c in AGG]).fit(train_s)
+
+assembler = VectorAssembler(
+    inputCols=NONAGG + [c+"_imp" for c in AGG] + ["svd_features"],
+    outputCol="features", handleInvalid="error")
+```
+
+### Logistic Regression Training
+
+Four logistic regression models were trained: multinomial (4-class) and binomial (binary), each in a conservative (A, regParam=0.1) and lighter (B, regParam=0.01) L2 regularization configuration, mirroring M3's Config A/B structure.
+
+```python
+from pyspark.ml.classification import LogisticRegression
+
+specs = [
+    ("lr_4class_A", "label_4class_idx", "weight_4class", "multinomial", 0.1),
+    ("lr_4class_B", "label_4class_idx", "weight_4class", "multinomial", 0.01),
+    ("lr_binary_A", "label_binary_idx", "weight_binary", "binomial",    0.1),
+    ("lr_binary_B", "label_binary_idx", "weight_binary", "binomial",    0.01),
+]
+for key, lab, wt, fam, rp in specs:
+    lr = LogisticRegression(featuresCol="features", labelCol=lab, weightCol=wt,
+                            family=fam, maxIter=100, regParam=rp, elasticNetParam=0.0)
+    m = lr.fit(train_a)
+    m.write().overwrite().save(f"../models/{key}_v2/")
+```
+
+### Model Evaluation Results (Milestone 4)
+
+**4-Class and Binary Weighted F1:**
+
+| Model | regParam | Train WF1 | Val WF1 | Test WF1 |
+|---|---|---|---|---|
+| lr_4class_A | 0.10 | 0.4324 | 0.4783 | 0.4707 |
+| lr_4class_B | 0.01 | 0.4424 | 0.4913 | 0.4793 |
+| lr_binary_A | 0.10 | 0.6370 | 0.6744 | 0.6683 |
+| lr_binary_B | 0.01 | 0.6464 | 0.6815 | 0.6723 |
+
+*M3 XGBoost baselines for reference: 4-class test WF1 = 0.4514 (Config A); binary test WF1 = 0.6260 (Config A).*
+
+The lighter-regularization Config B models edge out Config A on every split. Both 4-class (0.4793) and binary (0.6723) test WF1 exceed the structured-only M3 XGBoost baselines, confirming that SVD content features add predictive signal beyond the structured feature set alone.
+
+**WF1 by Split:**
+
+![LR WF1 by Split](outputs/figures/m4_lr_wf1_by_split.png)
+
+**Confusion Matrices (Config B, test split):**
+
+![4-Class Confusion Matrix](outputs/figures/m4_lr_4class_B_confusion_test.png)
+
+![Binary Confusion Matrix](outputs/figures/m4_lr_binary_B_confusion_test.png)
+
+Test WF1 exceeds train WF1 across all four models. This is consistent with the evaluation design rather than anomalous generalization: training predictions come from class-weighted fits over the balanced 30% stratified sample, while val/test carry the natural class distribution. The near-zero train/test gap combined with low minority-class F1 (crowd-pleaser ~0.19, debate-starter ~0.23) indicates high bias in the linear model it lacks the capacity to separate the middle engagement tiers, not the variance that would indicate overfitting.
+
+
+---
+
+# Written Report
+
+## Abstract
+
+Social media platforms face a critical challenge in predicting how content will engage their communities. Not just whether a post will be popular, but what kind of engagement it will receive. A post that attracts thousands of upvotes but yields no comment discussion serves a fundamentally different role than one that sparks hundreds of comments but remains controversial in score (whether it be likes, reddit votes, etc.), yet most engagement prediction approaches collapse these distinct outcomes into a single metric. This project uses the Pushshift Reddit Submissions Dataset, a public archive of Reddit posts hosted on HuggingFace, totaling approximately 89 GB and containing over 549 million submissions. We propose a multiclass classification pipeline in PySpark that predicts a post's engagement archetype (viral, crowd-pleaser, debate-starter, or low-engagement) using pre-publication features derived from title linguistics, author posting history, subreddit context, and temporal patterns. Class boundaries are defined using per-subreddit quantiles of score and comment count to account for the vastly different engagement norms across communities. This analysis requires distributed processing because constructing per-author behavioral features across hundreds of millions of posts, computing per-subreddit engagement baselines, and performing temporal aggregations exceed the memory and compute capacity of a single machine.
+
+## Introduction
+
+Reddit is one of the largest social platforms in the world, organized into thousands of distinct communities (subreddits) each with their own norms, audiences, and engagement patterns. Understanding what drives post engagement has practical implications for content moderation, platform health, and proactive resource allocation, particularly for identifying posts likely to generate contentious or high-volume discussion before comments arrive.
+
+Existing work on social media engagement prediction typically frames the problem as binary (popular vs. not) or as a regression over raw vote counts. This conflates qualitatively different engagement outcomes: a post can accumulate high scores with minimal discussion, or generate extensive debate while remaining score-neutral or negative. We argue that a further segmented engagement archetype derived from the joint distribution of score and comment volume relative to community norms is a more meaningful and actionable prediction target than a simple high vs. low engagement model. Our project seeks to gain further classification insight from the juxtaposition of our proposed four-tier class model to a standard two-tier class model.
+
+We define four engagement archetypes:
+- **Viral**: high score, high comments — broadly appealing and discussion-generating
+- **Crowd-pleaser**: high score, low comments — well-received but not discussion-driving
+- **Debate-starter**: low score, high comments — controversial or polarizing content
+- **Low-engagement**: low score, low comments — did not resonate with the community
+
+Class boundaries are assigned using per-subreddit quantile thresholds rather than global thresholds, accounting for the fact 
+that 100 comments is unremarkable in r/AskReddit but exceptional in a small niche subreddit. 
+
+
+
+## Methods
+
+### Data Exploration
+
+The full 549,662,955-post dataset was profiled in Milestone 2 using PySpark DataFrame operations on SDSC Expanse. Key findings: both `score` (mean 44.84, std 707.38) and `num_comments` (mean 8.36, std 93.11) are extremely right-skewed, confirming that global engagement thresholds would label nearly everything as low-engagement. This led us to believe that looking locally at subreddits and evaluating engagement on quantiles for each subreddit would be more effective.
+
+Additionally, a critical data quality issue was discovered: Pushshift stores missing `selftext` as empty strings rather than SQL NULLs, and deleted authors as the literal string `[deleted]`. Naive null-checks miss both entirely.
+
+### Preprocessing
+
+All preprocessing ran on the full 535,480,818-row filtered dataset in PySpark on SDSC Expanse.
+
+**Filtering:** 
+Rows with null `subreddit`/`subreddit_id` (~306K), null `score` (21), and negative `num_comments` (1,090) were removed. The single duplicate post ID was retained as the removal was not worth the compute cost.
+
+**Label generation:** 
+Per-subreddit 75th percentile thresholds for `score` and `num_comments` were computed via `Window.partitionBy("subreddit")` + `percentile_approx()`, then a four-way conditional assigned each post its engagement archetype. A binary high/low label was generated in parallel.
+
+**Feature engineering (19 features, all pre-publication):** 
+Title structural features (length, number presence, sentiment via VADER UDF), post-type flags (`is_text_post`, `selftext_len`), author flags (`is_known_bot`, `is_anonymous_author`), temporal features (`hour_of_day`, `day_of_week`), author history aggregations (`author_post_count`, `author_mean_score`), and subreddit context aggregations (`subreddit_post_count`, `subreddit_median_score`, `subreddit_median_comments`).
+
+**Train/val/test split:** 
+A stratified split with train (276M rows), validation (114M rows), and test (145M rows).
+
+
+### Final Model: Truncated SVD (LSA) + Logistic Regression
+
+**TF-IDF:** A 10,000-dimensional TF-IDF representation of post titles was constructed using `HashingTF` + `IDF`, fit on training only and applied to all three splits.
+
+**Truncated SVD:** `RowMatrix.computeSVD(k=100, computeU=False)` was applied to the training-split TF-IDF matrix. The quantity reported is explained Frobenius energy (uncentered), not centered statistical variance. The SVD was fit on a ~2M-row training subsample; the leading singular directions of a 10k TF-IDF space stabilize well below full row count.
+
+**Feature assembly (117-dim):** The 100 SVD components were concatenated with 17 retained structured features (the 21-feature M3 vector minus `has_title`, `has_question`, `has_exclamation`, `title_is_allcaps`, which had zero importance in M3). Nullable features were median-imputed (Imputer fit on train only).
+
+**Logistic regression:** Four models multinomial (4-class) and binomial (binary), each in regParam=0.1 (Config A) and regParam=0.01 (Config B) L2 regularization, were trained on a 30% stratified sample with inverse-frequency class weights. Evaluation used one distributed `groupBy(label, prediction)` per split to compute confusion matrices with minimum full-data passes.
+
+
 ## Results
 
-*To be completed.*
+**Explained Frobenius energy:**
+
+| k | Cumulative Explained Energy |
+|---|---|
+| 1 | 0.29% |
+| 10 | 1.40% |
+| 50 | 4.80% |
+| 100 | 7.90% |
+
+The spectrum is nearly flat after the first component (σ₁ = 1,244; components 2–100 range ~878 to ~548) with no elbow, indicating high effective rank. k=100 was chosen as a pragmatic compute/performance tradeoff.
+
+![SVD Explained Energy](outputs/figures/svd_explained_energy.png)
+
+**Logistic Regression Weighted F1:**
+
+| Model | regParam | Train WF1 | Val WF1 | Test WF1 |
+|---|---|---|---|---|
+| lr_4class_A | 0.10 | 0.4324 | 0.4783 | 0.4707 |
+| lr_4class_B | 0.01 | 0.4424 | 0.4913 | 0.4793 |
+| lr_binary_A | 0.10 | 0.6370 | 0.6744 | 0.6683 |
+| lr_binary_B | 0.01 | 0.6464 | 0.6815 | 0.6723 |
+
+Both 4-class (0.4793) and binary (0.6723) test WF1 exceeded what we could achieve with just the structural data, confirming that SVD title content features add signal beyond the structured feature set.
+
+![LR WF1 by Split](outputs/figures/m4_lr_wf1_by_split.png)
+
+**Confusion matrices (Config B, test):**
+
+![4-Class Confusion Matrix](outputs/figures/m4_lr_4class_B_confusion_test.png)
+
+![Binary Confusion Matrix](outputs/figures/m4_lr_binary_B_confusion_test.png)
+
+Per-class breakdown for lr_4class_B on the test split: low-engagement is the best-classified class (~0.65 recall). Crowd-pleaser and debate-starter show the lowest F1 scores (~0.19 and ~0.23 respectively), frequently misclassified into low-engagement.
+
+
 
 ## Discussion
 
-*To be completed.*
+**Explained energy vs. predictive signal.** 
+The SVD retains only 7.9% of total Frobenius energy at k=100. This initially seems discouraging, but the downstream logistic regression results demonstrate that retained energy and retained predictive signal are distinct quantities: the 100-component representation, concatenated with structured features, improves over the structured-only baseline on both tasks. Further research could be done to see the lift of additional dimensionality for the SVD step.
+
+**Fitting regime.** 
+The model sits on the underfitting side for the 4-class task and near balanced for binary. The results indicate high bias as the linear decision boundaries cannot separate the middle engagement tiers. Lighter regularization (Config B) improves all splits over Config A, which indicated the model benefits from more flexibility. Additional depth in model configuration may allow for better fits for the 4-class task.
+
+**Component interpretability.** Because TF-IDF was computed with `HashingTF` (a one-way hash with no inverse), there is no recoverable mapping from SVD component loadings back to vocabulary terms. Individual component interpretation is not possible with the current artifacts. A future iteration using `CountVectorizer` would enable this at the cost of holding the full vocabulary in memory.
+
+
+## Conclusion
+
+This project demonstrates that Reddit engagement archetypes are meaningfully predictable from pre-publication features, especially at the binary (high engagement vs low engagement) level. At further granularity it becomes obvious that richer context is required for effective modeling. 
+
+With more time and resources we would attempt replacing HashingTF with CountVectorizer which would allow for greater interpretability. Additionally, we'd want to increate the SVD rank to k = 500 or k = 1000 on a true multi-node cluster rather than a local model.
+
+
+
 
 ## Contributions
 
