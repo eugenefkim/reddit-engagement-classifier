@@ -200,10 +200,13 @@ All features will be derived from pre-publication information only to prevent da
 - `StandardScaler` — feature normalization
 
 ## Milestone 3 — Preprocessing and XGBoost Model Fitting (4-Class and Binary)
+> [!IMPORTANT]
+> The numbers below are now stale due to a direct leak that was fixed during Milestone 4. The numbers are kept here to keep the honest narrative as many insights were derived from the leak. Please note the listed v2 notebook below contains the leakage-free code and numbers numbers. The pre-leakage notebook can be found in the reddit-engagement-classifier/notebooks/Milestone3_Notes folder.
+> Details on the leak and the new performance numbers are given at the bottom of this Milestone 3 section. 
 
 ### Notebook (Milestone 3)
 
-The Milestone 3 preprocessing and model fitting notebook is located at: [`notebooks/Milestone3_Pushshift.ipynb`](notebooks/Milestone3_Pushshift.ipynb)
+The Milestone 3 preprocessing and model fitting notebook is located at: [`notebooks/Milestone3_Pushshift_v2.ipynb`](notebooks/Milestone3_Pushshift_v2.ipynb)
 
 ### SparkSession Configuration (Milestone 3)
 
@@ -374,23 +377,28 @@ The 4-class XGBoost models demonstrate that Reddit engagement archetypes are mea
 
 **How distributed computing helped:** The preprocessing pipeline involved per-author and per-subreddit aggregations, VADER sentiment UDF, and StandardScaler fit, all on 535M rows and exceeds single-machine memory capacity. Spark's distributed execution achieved an 11.23x speedup over single-thread baseline. Model training itself used 16 parallel XGBoost workers via `SparkXGBClassifier`, reducing training time to ~1–2 hours per model compared to an estimated 16+ hours single-threaded.
 
+### Leak Detection: Per-Author and Per-Subreddit Target Leak Details and Resolution (XGBoost Retrain)
+ 
+
+
 
 
 ## Milestone 4 — Dimensionality Reduction (SVD/LSA) and Logistic Regression
 
+> [!IMPORTANT]
+> A direct target leak was detected during M4 and all XGBoost numbers submitted in Milestone3 branch have been changed. The nature of the leak and new XGBoost performance metrics are detailed above in the Milestone 3 Leak Detection section. 
 
 ### Overview
 
-Milestone 3 established that test performance is structurally bounded: roughly 48.6% of the 2018 test set consists of authors with no training-period history, so the author/subreddit aggregate features that dominate the baseline carry no signal for nearly half of test. Content-derived features are then our focus for Milestone 4.
+Milestone 3 established that test performance is structurally bounded: roughly 48.6% of the 2018 test set consists of authors with no training-period history, so the author/subreddit aggregate features that dominate the baseline carry no signal for nearly half of test. Content-derived features are then our focus for Milestone 4. We decided to go with a TF-IDF under the impression that certain rare words could help us with our hard classes debate-starter and crowd-pleaser. The Word2Vec title embeddings were explored and did not provide viable lift. 
 
-This milestone reduces that sparse data created by TF-IDF frwith **Truncated SVD**, the standard form of **Latent Semantic Analysis (LSA)** for TF-IDF, then trains logistic regression models on the resulting combined feature vector.
+This milestone reduces that sparse data created by TF-IDF with **Truncated SVD**, the standard form of **Latent Semantic Analysis (LSA)** for TF-IDF, then trains logistic regression models on the resulting combined feature vector. We deviated from our previous LightBGM exploration because we did not know a linear model would be allowed for Milestone 4. A linear model provides a solid comparison model to our XGBoost tree-based model. The XGBoost model (Config B) from M3 will also be trained on the finalized SVD feature set (with some dropped features). 
 
 ### SparkSession Configuration (Milestone 4)
 
 ```python
 spark = SparkSession.builder \
     .appName("PushshiftRedditSVD") \
-    .master("local[*]") \
     .config("spark.driver.memory", "120g") \
     .config("spark.driver.maxResultSize", "8g") \
     .config("spark.sql.shuffle.partitions", "200") \
@@ -401,7 +409,7 @@ spark = SparkSession.builder \
 
 ### TF-IDF Feature Engineering
 
-A 10,000-dimensional TF-IDF representation of post titles was constructed using `pyspark.ml.feature.HashingTF` + `IDF`, fit on the training split only and applied to all three splits.
+A 10,000-dimensional TF-IDF representation of post titles was constructed using `pyspark.ml.feature.HashingTF` + `IDF`, fit on a ~2M subsample of the training split only and applied to all three splits due to computational limitations.
 
 ### Truncated SVD (Latent Semantic Analysis)
 
