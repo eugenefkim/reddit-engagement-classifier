@@ -383,7 +383,7 @@ The 4-class XGBoost models demonstrate that Reddit engagement archetypes are mea
 
 Milestone 3 established that test performance is structurally bounded: roughly 48.6% of the 2018 test set consists of authors with no training-period history, so the author/subreddit aggregate features that dominate the baseline carry no signal for nearly half of test. Content-derived features are then our focus for Milestone 4.
 
-This milestone reduces that sparse data created by TF-IDF frwith **Truncated SVD**, the standard form of **Latent Semantic Analysis (LSA)** for TF-IDF, then trains logistic regression models on the resulting combined feature vector.
+This milestone reduces the sparse TF-IDF representation using **Truncated SVD**, the standard form of **Latent Semantic Analysis (LSA)** for TF-IDF, then trains logistic regression models on the resulting combined feature vector.
 
 ### SparkSession Configuration (Milestone 4)
 
@@ -536,7 +536,7 @@ Social media platforms face a critical challenge in predicting how content will 
 
 ## Introduction
 
-Reddit is one of the largest social platforms in the world, organized into thousands of distinct communities (subreddits) each with their own norms, audiences, and engagement patterns. Understanding what drives post engagement has practical implications for content moderation, platform health, and proactive resource allocation, particularly for identifying posts likely to generate contentious or high-volume discussion before comments arrive.
+Reddit is one of the world’s largest social media platforms, organized into thousands of distinct communities known as subreddits. Each subreddit has its own norms, audience, and engagement patterns. Understanding the factors that drive post engagement can support content moderation, platform health, and proactive resource allocation, especially for identifying posts likely to generate contentious or high-volume discussion.
 
 Existing work on social media engagement prediction typically frames the problem as binary (popular vs. not) or as a regression over raw vote counts. This conflates qualitatively different engagement outcomes: a post can accumulate high scores with minimal discussion, or generate extensive debate while remaining score-neutral or negative. We argue that a further segmented engagement archetype derived from the joint distribution of score and comment volume relative to community norms is a more meaningful and actionable prediction target than a simple high vs. low engagement model. Our project seeks to gain further classification insight from the juxtaposition of our proposed four-tier class model to a standard two-tier class model.
 
@@ -548,7 +548,6 @@ We define four engagement archetypes:
 
 Class boundaries are assigned using per-subreddit quantile thresholds rather than global thresholds, accounting for the fact 
 that 100 comments is unremarkable in r/AskReddit but exceptional in a small niche subreddit. 
-
 
 
 ## Methods
@@ -683,8 +682,7 @@ The model sits on the underfitting side for the 4-class task and near balanced f
 
 ## Conclusion
 
-This project demonstrates that Reddit engagement archetypes are meaningfully predictable from pre-publication features, especially at the binary (high engagement vs low engagement) level. At further granularity it becomes obvious that richer context is required for effective modeling. We learned that distributed computing allowed us to work with data that would have otherwise been impossible. The ability to do analysis across hundreds of millions of rows of data would be highly inefficient or impossible on a single machine. The caveat to this is that the Spark framework was prone to out of memory errors and kernel failures. So we often had to revisit our approaches to better fit the distributed system, focusing on delegating processes into smaller pieces that wouldn't overwhelm the distributed system. With more time and resources we would attempt replacing HashingTF with CountVectorizer which would allow for greater interpretability. Additionally, we'd want to increate the SVD rank to k = 500 or k = 1000 on a true multi-node cluster rather than a local model.
-
+This project demonstrates that Reddit engagement archetypes are meaningfully predictable from pre-publication features, especially at the binary (high engagement vs low engagement) level. At further granularity it becomes obvious that richer context is required for effective modeling. We learned that distributed computing allowed us to work with data that would have otherwise been impossible. The ability to do analysis across hundreds of millions of rows of data would be highly inefficient or impossible on a single machine. The caveat to this is that the Spark framework was prone to out of memory errors and kernel failures. So we often had to revisit our approaches to better fit the distributed system, focusing on delegating processes into smaller pieces that wouldn't overwhelm the distributed system. With more time and resources we would attempt replacing HashingTF with CountVectorizer which would allow for greater interpretability. Additionally, we'd want to increase the SVD rank to k = 500 or k = 1000 on a true multi-node cluster rather than a local model.
 
 
 
