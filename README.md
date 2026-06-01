@@ -377,10 +377,88 @@ The 4-class XGBoost models demonstrate that Reddit engagement archetypes are mea
 
 **How distributed computing helped:** The preprocessing pipeline involved per-author and per-subreddit aggregations, VADER sentiment UDF, and StandardScaler fit, all on 535M rows and exceeds single-machine memory capacity. Spark's distributed execution achieved an 11.23x speedup over single-thread baseline. Model training itself used 16 parallel XGBoost workers via `SparkXGBClassifier`, reducing training time to ~1–2 hours per model compared to an estimated 16+ hours single-threaded.
 
-### Leak Detection: Per-Author and Per-Subreddit Target Leak Details and Resolution (XGBoost Retrain)
+
+## Milestone 3 Corrected - Leakage Detection: Per-Author and Per-Subreddit Target Leak Details and Resolution (XGBoost Retrain)
  
+ #### The Target Leak: Discovery and Resolution
 
+While reviewing the Milestone 3 pipeline in preparation for Milestone 4, we identified a target leak in how the per-author and per-subreddit aggregate features had been engineered. The leak was not uniform and it entered through two distinct feature families and at differing magnitudes which is part of why it initially escaped notice.
 
+**How the leak entered.** The aggregate features summarize the very quantities the label is built from. The per-subreddit features (`subreddit_post_count`, `subreddit_median_score`, `subreddit_median_comments`) and the per-author features (`author_post_count`, `author_mean_score`) were each computed with a `groupBy().agg()` over the **full 2012–2018 dataset**, before the temporal train/validation/test split was applied. Because the label is a per-subreddit quantile function of `score` and `num_comments`, any feature that aggregates those same columns over a window that includes the validation or test period is effectively a partial summary of the target for those rows.
+
+**Why the magnitude varied.** The leak's severity differed by feature family. The per-subreddit median features leaked most directly — they are computed from the same percentile machinery that defines the label, so a subreddit-median feature spanning the test period encodes the test-period thresholds themselves. The per-author features leaked more diffusely: `author_mean_score` over the full window let a 2018 test row "see" an author's 2018 average score, but the connection to the row's own label is weaker than for the subreddit medians. The result was a leak of varying magnitude rather than a single clean offset. This is consistent with the inconsistent inflation observed once we measured it (next section).
+
+**How we found it.** The leak surfaced during the Milestone 4 review when we traced the feature-construction lineage back through the notebook and noticed the aggregate `groupBy` operations preceded the temporal split rather than following it. The tell was that the validation and test weighted-F1 scores were *higher* than training.
+
+**How we resolved it.** We rebuilt the feature pipeline so that all per-author and per-subreddit aggregates are computed on the **training period only** (2012–2016), then joined onto the validation and test rows as fixed, training-derived statistics. A held-out row is now described purely by what its author and subreddit looked like during the training window — never by its own or any future period. Lineage breaks were inserted between the aggregate computation and the downstream joins to prevent Spark's lazy evaluation from silently recomputing the aggregates over the full dataset. The XGBoost models were then fully retrained on the corrected features; no hyperparameters were changed, so the resulting performance differences isolate the effect of the leak correction alone.
+
+#### Corrected Milestone 3 results (post-fix — used as the M4 baseline)
+
+**4-Class Weighted F1 (corrected):**
+
+| Config | Train | Val | Test |
+|---|---|---|---|
+| Config A | 0.5350 | 0.5008 | **0.4514** |
+| Config B | 0.5778 | 0.5122 | 0.4451 |
+
+**Binary Weighted F1 (corrected):**
+
+| Config | Train | Val | Test |
+|---|---|---|---|
+| Config A | 0.7116 | 0.6732 | **0.6260** |
+| Config B | 0.7375 | 0.6787 | 0.6149 |
+
+> [!IMPORTANT]
+> **Reversal #1 — configuration ranking flipped.** The stale analysis above concluded
+> "Config B outperforms Config A across every split and both tasks." After the leak fix
+> this is no longer true: on **test**, the conservative Config A now generalizes *better*
+> than the aggressive Config B for both tasks (4-class 0.4514 vs 0.4451; binary 0.6260 vs
+> 0.6149). Once the leaked signal is removed, Config B's extra depth overfits rather than
+> helps. Config A is therefore carried forward as the Milestone 4 baseline.
+
+![XGBoost Fitting Analysis (Leakage-Corrected)](outputs/figures/xgb_v2_fitting_analysis.png)
+
+The fitting curves make the corrected behavior explicit. For both tasks, weighted F1 falls monotonically from train to validation to test, and the two configurations **cross**: Config B starts higher on train (its extra depth fits the training sample better) yet ends lower on test, while the more regularized Config A degrades more gently and generalizes better. This crossover is the signature of Config B overfitting once the leak is gone.
+
+> [!IMPORTANT]
+> **Reversal #2 — fitting regime reinterpreted.** The stale analysis above described both
+> models as sitting "firmly in the underfitting region," attributing the train-below-test
+> pattern to a temporal shift between Reddit's early and later years. That interpretation
+> was an artifact of the leak. In the corrected results, **train is the highest split and
+> performance falls to test** — a normal generalization gap, steepest for the
+> higher-capacity Config B. The corrected models are bounded not by underfitting but by the
+> cold-start information ceiling described above: structured features cannot describe the
+> ~48.6% of test authors with no training-period history.
+
+**Per-class test F1 (Config A, the carried-forward baseline):**
+
+| Class | 4-class F1 | Binary F1 |
+|---|---|---|
+| low-engagement | 0.466 | 0.5379 |
+| viral | 0.5619 | — |
+| crowd-pleaser | 0.2783 | — |
+| debate-starter | 0.2567 | — |
+| high-engagement | — | 0.688 |
+
+The 4-class minority classes (crowd-pleaser 0.28, debate-starter 0.26) are the weakest even in the corrected baseline, confirming the structured features struggle most with the middle engagement tiers. This is the gap Milestone 4's content features attempt to close.
+
+#### Feature importance (leakage-corrected)
+
+![4-Class Feature Importance (Leakage-Corrected)](outputs/figures/xgb_v2_4class_feature_importance.png)
+
+![Binary Feature Importance (Leakage-Corrected)](outputs/figures/xgb_v2_binary_feature_importance.png)
+
+Community and author context still dominate both tasks: `subreddit_post_count`, `author_mean_score`, and `author_post_count` remain the top features in every configuration. This is also why the cold-start population is so limiting. For an author with no training-period history, the three most important features carry no information.
+
+> [!IMPORTANT]
+> **Refinement — zero-weight features confirmed and acted on.** The stale analysis flagged
+> `has_question` and `has_exclamation` as zero-weight "candidates for removal." The
+> corrected feature-importance plots confirm this and extend it: `has_question`,
+> `has_exclamation`, `title_is_allcaps`, `is_new_author`, and `is_new_subreddit` all carry
+> effectively zero tree weight. In Milestone 4 the first four are dropped; `is_new_author`
+> and `is_new_subreddit` are **retained** despite zero tree importance, because they serve a
+> different role in the linear model — flagging which rows had aggregates imputed, signal a
+> regularized linear model can use that a tree splitting on the imputed value cannot.
 
 
 ## Milestone 4 — Dimensionality Reduction (SVD/LSA) and Logistic Regression
@@ -436,7 +514,7 @@ mat = RowMatrix(train_rows, numRows=n_train, numCols=N_HASH_FEATURES)
 svd = mat.computeSVD(K, computeU=False)
 ```
 
-The SVD was fit on a ~2M-row subsample of the training split. The full 83M-row fit was extrapolated at ~33 , not viable before submission, so the subsample fit serves as the production SVD: the leading singular directions of a 10k TF-IDF space stabilize well below the full row count. `V` (10,000 × 100) and `s` (100 singular values) were persisted to `../models/svd_title_k100_v2/`.
+The SVD was fit on a ~2M-row subsample of the training split. The full 83M-row fit was extrapolated at ~33 hours, not viable before submission. So the subsample fit serves as the production SVD: the leading singular directions of a 10k TF-IDF space stabilize well below the full row count. `V` (10,000 × 100) and `s` (100 singular values) were persisted to `../models/svd_title_k100_v2/` (gitignored).
 
 **Explained energy results:** The singular values are nearly flat after the first component (σ₁ = 1,244; components 2–100 ≈ 550–880). Cumulative explained energy reaches 7.9% at k=100, rising almost linearly across the retained range with no elbow.
 
