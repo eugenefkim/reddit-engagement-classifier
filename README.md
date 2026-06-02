@@ -127,42 +127,9 @@ Logistic regression cannot handle the NaN cold-start aggregates that XGBoost man
 
 Final vector: **12 row-local structured + 5 imputed aggregates + 100 SVD components = 117 dimensions**
 
-```python
-from pyspark.ml.feature import Imputer, VectorAssembler
-
-AGG    = ["author_post_count","author_mean_score","subreddit_post_count",
-          "subreddit_median_score","subreddit_median_comments"]
-NONAGG = ["title_len","title_has_number","is_text_post","selftext_len",
-          "hour_of_day","day_of_week","is_known_bot","is_anonymous_author",
-          "is_new_author","is_new_subreddit","title_sentiment","selftext_sentiment"]
-
-imputer = Imputer(strategy="median", inputCols=AGG,
-                  outputCols=[c+"_imp" for c in AGG]).fit(train_s)
-
-assembler = VectorAssembler(
-    inputCols=NONAGG + [c+"_imp" for c in AGG] + ["svd_features"],
-    outputCol="features", handleInvalid="error")
-```
-
 ### Logistic Regression Training
 
 Four logistic regression models were trained: multinomial (4-class) and binomial (binary), each in a conservative (A, regParam=0.1) and lighter (B, regParam=0.01) L2 regularization configuration, mirroring M3's Config A/B structure.
-
-```python
-from pyspark.ml.classification import LogisticRegression
-
-specs = [
-    ("lr_4class_A", "label_4class_idx", "weight_4class", "multinomial", 0.1),
-    ("lr_4class_B", "label_4class_idx", "weight_4class", "multinomial", 0.01),
-    ("lr_binary_A", "label_binary_idx", "weight_binary", "binomial",    0.1),
-    ("lr_binary_B", "label_binary_idx", "weight_binary", "binomial",    0.01),
-]
-for key, lab, wt, fam, rp in specs:
-    lr = LogisticRegression(featuresCol="features", labelCol=lab, weightCol=wt,
-                            family=fam, maxIter=100, regParam=rp, elasticNetParam=0.0)
-    m = lr.fit(train_a)
-    m.write().overwrite().save(f"../models/{key}_v2/")
-```
 
 ### Model Evaluation Results (Milestone 4)
 
