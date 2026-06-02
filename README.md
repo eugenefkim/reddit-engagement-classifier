@@ -46,6 +46,9 @@ The dataset is downloaded into `data/raw/`, approximately 89GB of 218 Parquet fi
 
 ## Milestone 4 — Dimensionality Reduction (SVD/LSA) and Logistic Regression
 
+### Notebooks
+Milestone 3 v2: [`notebooks/Milestone3_Pushshift_v2.ipynb`](notebooks/Milestone3_Pushshift_v2.ipynb) | Milestone 4: [`notebooks/Milestone4_Pushshift.ipynb`](notebooks/Milestone3_Pushshift.ipynb)
+
 ### Overview
 
 Milestone 3 established that test performance is structurally bounded: roughly 48.6% of the 2018 test set consists of authors with no training-period history, so the author/subreddit aggregate features that dominate the baseline carry no signal for nearly half of test. Content-derived features are then our focus for Milestone 4. We decided to go with a TF-IDF under the impression that certain rare words could help us with our hard classes debate-starter and crowd-pleaser. The Word2Vec title embeddings were explored and did not provide viable lift. 
