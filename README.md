@@ -317,7 +317,7 @@ A temporal split by post year: train (2012–2016, 276,442,594 rows), validation
 ### Model 1: Distributed XGBoost on Structure Features — 4-Class and Binary Label
 
 > [!IMPORTANT]
-> A target leak was detected during Milestone 4. The model configurations and results below are the **final, leakage-corrected** numbers. Four features found statistically insignificant in Milestone 3 (`has_title`, `has_question`, `has_exclamation`, `title_is_allcaps`) were removed in Milestone 4 and are not reflected in the Model 2 numbers.  
+> A temporal leak was detected during Milestone 4. The model configurations and results below are the **final, leakage-corrected** numbers. 
 
 `SparkXGBClassifier` (XGBoost 2.0.3) was trained on a 30% stratified sample of the full 276M-row training split (~83M rows). Two configurations were trained on both the 4-class and binary tasks (four models total):
 
@@ -406,15 +406,18 @@ Per-class breakdown for lr_4class_B on the test split: low-engagement and viral 
 
 ## Discussion
 
-### The temporal target leak and what it revealed
+### Project Limitation Findings from Temporal Leak Detection - Reddit's Structural Growth 
 
-The most consequential event in this project was discovering, during Milestone 4, that the Milestone 3 results were inflated by a temporal target leak. The per-author and per-subreddit aggregate features were computed over the full 2012–2018 dataset before the temporal train/validation/test split, so held-out rows were described by statistics that incorporated their own and future periods. Because the engagement label is itself a quantile function of `score` and `num_comments` (the very quantities those aggregates summarize) the features partially encoded the target for validation and test rows.
+The most consequential event in this project was discovering, during Milestone 4, that the Milestone 3 results were inflated by a temporal target leak. The per-author and per-subreddit aggregate features were erroneously computed over the full 2012–2018 dataset before the temporal train/validation/test split. 
 
-Correcting the leak (recomputing all aggregates on the training period only, with lineage breaks to prevent Spark from silently recomputing over the full data) lowered test weighted F1 by 0.10–0.14 across all four configurations and, notably, *reversed the configuration ranking*: under the leak the aggressive Config B won everywhere; post-fix the conservative Config A generalizes better, because once the leaked signal is gone Config B's extra depth overfits rather than helps. This is a cautionary lesson we would carry into any production setting as leakage does not merely inflate a number, it can invert the conclusions you draw about which model is best.
+Correcting the leak (recomputing all aggregates on the training period only, with lineage breaks to prevent Spark from silently recomputing over the full data) lowered test weighted F1 by 0.10–0.14 across all four configurations and, notably, *reversed the configuration ranking*: under the leak the aggressive Config B won everywhere; post-fix the conservative Config A generalizes better, because once the leaked signal is gone Config B's extra depth overfits rather than helps.
 
-The correction also surfaced the project's central structural limitation: **48.6% of the 2018 test set are cold-start authors with no training-period history.** For these rows every author-aggregate feature is null, so the three features that dominate importance (`subreddit_post_count`, `author_mean_score`, `author_post_count`) carry no signal for nearly half of test. The corrected ceiling is therefore an *information* ceiling, not a model-capacity one. This was the direct motivation for the content-feature work in Milestone 4. If we cannot describe who posted something for half of test, the recourse is to describe what was posted.
+Reddit has shown significant structural growth over the 2012-2018 temporal period. Our training set spanned 5 years (2012-2016) which is an average of ~55M posts per year, while our validation set contained 1 year (2017) with ~114M posts that year. The behavior is exacerbated further in the train set (2018), which had ~145M posts. 
 
-### Did dimensionality reduction actually help? A controlled answer
+The detection and removal of this leak surfaced this project's central limitation: **48.6% of the 2018 test set are cold-start authors with no training-period history.** For these rows every author-aggregate feature is null, so the three features that dominate importance (`subreddit_post_count`, `author_mean_score`, `author_post_count`) carry barely any signal for nearly half of test. Thus, the implications were drastic and we simply did not have the compute time it would've required to implement some sort of **rolling-window or point-in-time features** that could've incorporated the per-author and per-subreddit signal up to the test point leakage-free. **We believe these features should be the first improvement made to this project pipeline as our analysis shows they would provide significant lift to model performance**.
+
+
+### Evaluation of TF-IDF + SVD Feature Implementation - Did They Help? 
 
 The SVD retains only 7.9% of the title matrix's total Frobenius energy at k=100, which initially appears discouraging. The downstream results show, however, that retained energy and retained predictive signal are distinct quantities. The discarded 92% is largely per-post lexical noise (rare tokens, hash collisions) that does not generalize.
 
@@ -425,36 +428,53 @@ To isolate whether the SVD content features genuinely add signal we ran a contro
 | 4-class test WF1 | 0.4514 | 0.4493 | Flat (within sample-size noise) |
 | Binary test WF1 | 0.6260 | 0.6371 | +0.011 (clear gain) |
 
-The honest conclusion is **task-dependent**: title content features measurably help the binary high/low distinction but are roughly neutral for the four-tier task on a fixed model. This refines the simpler "SVD adds signal" claim as the lift exists, but it is concentrated where the decision boundary is coarser. Distinguishing crowd-pleasers from debate-starters appears to require signal that 100 hashed-title components do not capture.
+The honest conclusion is **task-dependent**: title content features measurably help the binary high/low distinction but are roughly neutral for the four-tier task on a fixed model. This refines the simpler "SVD adds signal" claim as the lift exists, but it is concentrated where the decision boundary is more defined. Distinguishing crowd-pleasers from debate-starters appears to require signal that 100 hashed-title components do not capture, at least under the current setup. With more computing power and being able to fit on much more data, we postulate that the TF-IDF + SVD features could provide more lift, but this is would need to be verified.
 
-### Why logistic regression was chosen over XGBoost on the reduced features
+### Why LogReg Over XGBoost
 
-Both models were trained on the identical 117-dimensional set. Logistic regression won on test for both tasks (4-class 0.4793 vs 0.4493; binary 0.6723 vs 0.6371), despite XGBoost achieving higher *training* F1. The gradient-boosted model overfits the dense, low-energy SVD features (100 components carrying 7.9% of the matrix energy give a tree ample room to fit sample-specific structure that does not generalize) while the regularized linear model generalizes more cleanly. This is the inverse-regularization story seen across the project: the two model families respond oppositely to added capacity, and on this feature geometry the simpler model is the better one. Logistic regression is therefore our final chosen model.
+Both models were trained on the identical 117-dimensional set. Logistic regression won on test for both tasks (4-class 0.4793 vs 0.4493; binary 0.6723 vs 0.6371), despite XGBoost achieving higher *training* F1. The gradient-boosted model overfits the dense, low-energy SVD features because 100 components carrying 7.9% of the matrix energy give a tree ample room to fit sample-specific structure that does not generalize. This shows the well-known story of tree-based models overfitting or "memorizing" training data, so for our current pipeline we chose the LogReg as we believed the linear model generalized cleaner. 
 
-### Per-class behavior and the precision/recall tradeoff
+### Findings from Per-Class Cehavior and the Precision-Recall Tradeoff
 
-The 4-class confusion structure is the clearest window into model behavior. Low-engagement and viral are learned well; the middle tiers are not as crowd-pleaser (F1 ~0.19) and debate-starter (F1 ~0.23) are frequently absorbed into the two majority classes. This is the expected signature of a linear model on classes that are not linearly separable: the middle archetypes ("high on one engagement axis but not the other") sit between the majorities and a single hyperplane per class cannot carve them out.
+The 4-class confusion structure is clear on model behavior: low-engagement and viral are learned well and the middle tiers are not. Crowd-pleaser (F1 ~0.19) and debate-starter (F1 ~0.23) are frequently absorbed into the two majority classes. This is expected behavior from a linear model on classes that are not linearly separable.
 
 Interestingly, the XGBoost comparison recovered crowd-pleasers somewhat better than the linear model (recall 0.208 vs 0.155). This hints that the middle tiers want a non-linear boundary even though XGBoost loses overall. On the binary task, both models lean toward predicting high-engagement, with XGBoost trading precision for recall more aggressively (high-engagement recall 0.752 at precision 0.676, versus the linear model's more balanced 0.708/0.726). The linear model's more even operating point is part of why it wins on weighted F1.
 
-### Fitting regime
+### Honest Critique of our Model Pipeline
 
-For the logistic model, test and validation weighted F1 exceed training F1 across all four configurations. This is not anomalous generalization but an artifact of evaluation composition: training F1 is measured on class-weighted fits over a balanced 30% sample, where upweighted minority classes depress the weighted average, while validation and test carry the natural distribution dominated by the well-learned majority classes. Combined with the very low minority-class F1, this indicates **high bias** on the four-tier task. The linear model lacks the capacity to separate the middle tiers, and lighter regularization (Config B) improving every split confirms it wants more flexibility, not less. The corrected XGBoost model, by contrast, shows the normal pattern (train highest, falling to test), with the steeper drop for the higher-capacity Config B. This is a generalization gap, not underfitting.
+For the logistic model, test and validation weighted F1 exceed training F1 across all four configurations. Combined with the very low minority-class F1, this indicates **high bias** on the four-tier task. 
 
-### Component interpretability
+The linear model lacks the capacity to separate the middle tiers, and lighter regularization (Config B) improving every split confirms it wants more flexibility, not less. The corrected XGBoost model, by contrast, shows the normal pattern (train highest, falling to test), with the steeper drop for the higher-capacity Config B. This is a generalization gap, not underfitting.
 
-Because TF-IDF was computed with `HashingTF` (a one-way hash with no inverse), there is no recoverable mapping from SVD component loadings back to vocabulary terms, so individual component interpretation is not possible with the current artifacts. Moreover, the nearly flat singular spectrum means the eigengaps between adjacent components are tiny, so individual tail axes are weakly determined and would rotate between fits. The reduced features are best treated as a subspace rather than interpreted axis by axis. A future iteration using `CountVectorizer` would restore an invertible vocabulary (enabling per-component term interpretation) at the cost of holding the full vocabulary in memory.
+If we wished to really dive into attempting our 4-class model but specifically **into predicting the minority classes with reasonably good performance** we would likely have to explore other non-linear models that do not overfit as much as our XGBoost did, potentially a shallower GBT. 
 
+**Nonetheless, our model performed well on the binary task, which is an accomplishment given our time and compute limitations.**
+
+### Our Results - Are They Believable? 
+
+Overall, we believe our numbers and results are generally believable. Most of our findings have explainable causes and effects. In addition, our mistakes (temporal leak) and the remediation of them further supported our analytical narrative. 
+
+**The leak was definitive proof that per-author and per-subreddit features were the most significant predictors of pre-publication engagement, which was shown by our results pre- and post-leak and is one our headline results from this analysis.** 
+
+**The post-fix metrics behaved the way we would predict.** After correction, the model results align with independently known properties of the data rather than with wishful patterns. The binary task outperforms the 4-class task by a consistent margin across every configuration, which matches the intuition that a coarser decision boundary is easier to learn. The minority middle tiers (crowd-pleaser, debate-starter) have the lowest per-class F1, consistent with their position between the majority classes and with the ~48.6% cold-start rate that removes author signal for nearly half of test. These are explainable patterns.
+
+**The train/test relationship is clearly explained by both models.** Test WF1 exceeding train WF1 in the logistic model traces to a specific and verifiable cause: training F1 is measured on a class-weighted balanced sample where upweighted minority classes depress the weighted average, while validation and test carry the natural distribution. 
+
+The corrected XGBoost model, evaluated without that balancing artifact, shows the expected overfitting signature where train performance is inflated. The two models disagreeing in exactly the way the way one would predict them to increases our confidence that neither pattern is unbelievable.
+
+**The controlled XGBoost experiment on the TF-IDF + SVD expanded feature space prevents us from over-crediting the content features.** The XGBoost comparison ran at the end of Milestone 4 shows improvements in the binary task but little to none for the 4-class task.
+
+**However, we do have a few uncertainties as several results carry honest caveats.** The XGBoost comparison ran on a 20% sample versus the baseline's 30% due to computation limitations imposed by the feature space expansion. The honest near-flat 4-class result is reported as "within sample-size noise" rather than a precise null. Also due to computational limitations, the SVD was fit on a ~2M-row subsample rather than the full training split, justified by the stability of leading singular directions but not exhaustively validated. Lastly, the dataset ends in 2018, so none of these results speak to generalization on later Reddit. We flag these as other improvements.
 
 ## Conclusion
 
-This project set out to predict Reddit engagement *archetypes* — not merely whether a post would be popular, but what kind of engagement it would draw — from pre-publication features across 535 million posts. The headline result is that the binary high/low engagement distinction is meaningfully predictable (test weighted F1 0.672 with the final SVD + logistic regression model), while the four-tier distinction remains substantially harder (0.479), bounded by both a cold-start information ceiling and the linear separability of the middle archetypes.
+This project set out to predict Reddit engagement *archetypes* and not merely whether a post would be popular. Predicting what kind of engagement a post would draw from pre-publication features is much more difficult and ambiguous. The honest result of our project is that the binary high/low engagement distinction is meaningfully predicted well (test weighted F1 0.672 with the final SVD + logistic regression model), while the four-tier distinction remains substantially underperformed (0.479), bounded by true ambiguity but also plenty of explainable ceilings. Thus, regardless of the poor rare class performance, **our analysis taught us a lot about the data's behavior and gave us very clear signals of where we can go to improve.**
 
-Three findings stand out. First, the temporal leak correction was the project's defining moment: it lowered our headline numbers by 0.10–0.14 weighted F1, reversed which configuration we would have called best, and exposed that nearly half the test set consists of authors we have no history for. An impressive-looking result that does not survive scrutiny is worse than a modest one that does. Second, dimensionality reduction's value was task-dependent and only provable through a controlled same-model ablation — retained energy (7.9%) and retained predictive signal are genuinely different things. Third, on dense low-energy features the regularized linear model outgeneralized gradient-boosted trees, a reminder that model complexity should match feature geometry rather than default to the most powerful learner.
+On big data specifically, this analysis was infeasible on a single machine. Per-author and per-subreddit aggregations over 535M rows, per-subreddit quantile label generation, a VADER sentiment UDF across the full dataset, and distributed SVD on a 10,000-dimensional sparse matrix all required Spark's distributed execution; the preprocessing pipeline alone achieved an ~11x speedup over a single-threaded baseline. 
 
-On big data specifically: this analysis was infeasible on a single machine. Per-author and per-subreddit aggregations over 535M rows, per-subreddit quantile label generation, a VADER sentiment UDF across the full dataset, and distributed SVD on a 10,000-dimensional sparse matrix all required Spark's distributed execution; the preprocessing pipeline alone achieved an ~11x speedup over a single-threaded baseline. Equally instructive were the limits we hit: `local[*]` mode on a single node repeatedly exhausted memory on the expanded 117-dimensional feature space, forcing sample-size reductions and ultimately blocking a full-scale XGBoost ablation. This is itself a finding as dimensionality expansion has a real memory cost, and the natural next step is true multi-node distribution.
+`local[*]` mode on a single node repeatedly exhausted memory on the expanded 117-dimensional feature space, forcing sample-size reductions and ultimately blocking a full-scale XGBoost and LogReg train. This taught us that dimensionality expansion has a real memory cost, and the natural next step is true multi-node distribution.
 
-With more time and resources we would: replace `HashingTF` with `CountVectorizer` for an interpretable vocabulary; increase the SVD rank (k = 500–1000) on a multi-node cluster; engineer point-in-time author features that accumulate history *within* the test period (leakage-free) to attack the cold-start ceiling directly; and explore a non-linear model on the reduced features to recover the middle engagement tiers that the linear model collapses.
+With more time and resources we would replace `HashingTF` with `CountVectorizer` for an interpretable vocabulary, increase the SVD rank (k = 500–1000) on a multi-node cluster, and engineer point-in-time rolling-window author and subreddit features that accumulate history *within* the test period (leakage-free) to attack our ceiling. We'd also explore a non-linear model on the reduced features to recover the middle engagement tiers that the linear model collapses on. 
 
 ## Contributions
 
