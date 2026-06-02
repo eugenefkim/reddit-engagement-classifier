@@ -321,9 +321,63 @@ A temporal split by post year: train (2012–2016, 276,442,594 rows), validation
 
 `SparkXGBClassifier` (XGBoost 2.0.3) was trained on a 30% stratified sample of the full 276M-row training split (~83M rows). Two configurations were trained on both the 4-class and binary tasks (four models total):
 
+```python
+# 4-Class Config
+COMMON_PARAMS = dict(
+    features_col="features",
+    label_col="label_4class_idx",
+    weight_col="weight_4class",
+    num_class=4,
+    num_workers=16,
+    device="cpu",
+    missing=float("nan"),
+    seed=42,
+)
+
+# Binary Config
+BIN_COMMON = dict(
+    features_col="features",
+    label_col="label_binary_idx",
+    weight_col="weight_binary",
+    # num_class REMOVED — binary:logistic produces a single probability per row
+    num_workers=16,
+    device="cpu",
+    missing=float("nan"),
+    seed=42,
+)
+```
+
 **Config A (conservative):** `max_depth=4`, `n_estimators=200`, `learning_rate=0.05`, `subsample=0.8`, `colsample_bytree=0.8`, `reg_lambda=5.0`, `reg_alpha=1.0`, `min_child_weight=50`
 
+```python
+# 4-Class
+config_A = SparkXGBClassifier(**COMMON_PARAMS,
+    max_depth=4, n_estimators=200, learning_rate=0.05,
+    subsample=0.8, colsample_bytree=0.8,
+    reg_lambda=5.0, reg_alpha=1.0, min_child_weight=50)
+
+# Binary
+config_A_bin = SparkXGBClassifier(**BIN_COMMON,
+    max_depth=4, n_estimators=200, learning_rate=0.05,
+    subsample=0.8, colsample_bytree=0.8,
+    reg_lambda=5.0, reg_alpha=1.0, min_child_weight=50)    
+```
+
 **Config B (aggressive):** `max_depth=8`, `n_estimators=300`, `learning_rate=0.1`, `subsample=0.7`, `colsample_bytree=0.7`, `reg_lambda=1.0`, `reg_alpha=0.0`, `min_child_weight=10`
+
+```python
+# 4-Class
+config_B = SparkXGBClassifier(**COMMON_PARAMS,
+    max_depth=8, n_estimators=300, learning_rate=0.1,
+    subsample=0.7, colsample_bytree=0.7,
+    reg_lambda=1.0, reg_alpha=0.0, min_child_weight=10)
+
+# Binary 
+config_B_bin = SparkXGBClassifier(**BIN_COMMON,
+    max_depth=8, n_estimators=300, learning_rate=0.1,
+    subsample=0.7, colsample_bytree=0.7,
+    reg_lambda=1.0, reg_alpha=0.0, min_child_weight=10)
+```
 
 Inverse-frequency class weights were applied via `weightCol`. Training took ~1 hour (Config A) and ~2 hours (Config B) per task. The training data here was structural only and did not include any TF-IDF or other NLP-derived features.
 
@@ -336,7 +390,60 @@ Inverse-frequency class weights were applied via `weightCol`. Training took ~1 h
 
 **Feature assembly (117-dim):** The 100 SVD components were concatenated with the 17 retained structured features (the 21-feature M3 vector minus `has_title`, `has_question`, `has_exclamation`, `title_is_allcaps`, which had zero importance in M3). Nullable aggregate features were median-imputed (Imputer fit on train only).
 
+```python
+from pyspark.ml.feature import Imputer, VectorAssembler
+
+train_s = spark.read.parquet("../data/processed/train_svd_sample30_v2/")
+
+AGG = ["author_post_count","author_mean_score","subreddit_post_count",
+       "subreddit_median_score","subreddit_median_comments"]
+NONAGG = ["title_len","title_has_number","is_text_post","selftext_len",
+          "hour_of_day","day_of_week","is_known_bot","is_anonymous_author",
+          "is_new_author","is_new_subreddit","title_sentiment","selftext_sentiment"]
+
+imputer = Imputer(strategy="median", inputCols=AGG,
+                  outputCols=[c+"_imp" for c in AGG]).fit(train_s)
+imputer.write().overwrite().save("../models/m4_imputer_v2/")
+
+assembler = VectorAssembler(
+    inputCols=NONAGG + [c+"_imp" for c in AGG] + ["svd_features"],
+    outputCol="features", handleInvalid="error")
+
+train_a = assembler.transform(imputer.transform(train_s.drop("features")))
+```
+
 **Logistic regression:** Four models were trained on a 30% stratified sample with inverse-frequency class weights: multinomial (4-class) and binomial (binary), each at regParam=0.1 (Config A) and regParam=0.01 (Config B) L2 regularization. Evaluation used one distributed `groupBy(label, prediction)` per split to compute confusion matrices with minimum full-data passes.
+
+```python
+# 4-Class LR Train
+from pyspark.ml.classification import LogisticRegression
+train_a = spark.read.parquet("../data/processed/train_model117_v2/")
+
+specs = [  # (key, labelCol, weightCol, family, regParam)
+    ("lr_4class_A","label_4class_idx","weight_4class","multinomial",0.1),
+    ("lr_4class_B","label_4class_idx","weight_4class","multinomial",0.01),
+]
+for key, lab, wt, fam, rp in specs:
+    lr = LogisticRegression(featuresCol="features", labelCol=lab, weightCol=wt,
+                            family=fam, maxIter=100, regParam=rp, elasticNetParam=0.0)
+    m = lr.fit(train_a)
+
+# Binary LR Train
+train_bin = train_a.withColumn("label_binary_idx",
+                               F.col("label_binary_idx").cast("double").alias("label_binary_idx"))
+# Force-clear column metadata:
+train_bin = train_bin.withColumn("label_binary_clean",
+                                 F.col("label_binary_idx") + F.lit(0.0))
+
+binary_specs = [
+    ("lr_binary_A", "label_binary_clean", "weight_binary", "binomial", 0.1),
+    ("lr_binary_B", "label_binary_clean", "weight_binary", "binomial", 0.01),
+]
+for key, lab, wt, fam, rp in binary_specs:
+    lr = LogisticRegression(featuresCol="features", labelCol=lab, weightCol=wt,
+                            family=fam, maxIter=100, regParam=rp, elasticNetParam=0.0)
+    m = lr.fit(train_bin)
+```
 
 
 ## Results
