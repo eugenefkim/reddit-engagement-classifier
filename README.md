@@ -181,15 +181,50 @@ The lighter-regularization Config B models edge out Config A on every split. Bot
 
 **WF1 by Split:**
 
-![LR WF1 by Split](outputs/figures/m4_lr_wf1_by_split.png)
+The grouped weighted-F1-by-split figure for all four logistic configurations is shown below, compared to the XGBoost baseline:
 
-**Confusion Matrices (Config B, test split):**
+![Logistic Regression WF1 by Split](outputs/figures/m4_lr_wf1_by_split.png)
 
-![4-Class Confusion Matrix](outputs/figures/m4_lr_4class_B_confusion_test.png)
+**Confusion matrices (Config B, test split) — granular counts:**
 
-![Binary Confusion Matrix](outputs/figures/m4_lr_binary_B_confusion_test.png)
+The diagonal entries are correct classifications; off-diagonal entries are the per-class false positives and false negatives.
 
-Test WF1 exceeds train WF1 across all four models. This is consistent with the evaluation design rather than anomalous generalization: training predictions come from class-weighted fits over the balanced 30% stratified sample, while val/test carry the natural class distribution. The near-zero train/test gap combined with low minority-class F1 (crowd-pleaser ~0.19, debate-starter ~0.23) indicates high bias in the linear model it lacks the capacity to separate the middle engagement tiers, not the variance that would indicate overfitting.
+**4-class test confusion (rows = actual, columns = predicted):**
+
+| Actual \ Predicted | low-engagement | viral | crowd-pleaser | debate-starter |
+|---|---|---|---|---|
+| low-engagement | 28,374,720 | 14,021,389 | 4,087,807 | 13,420,759 |
+| viral | 6,749,440 | 32,166,292 | 3,222,153 | 7,990,304 |
+| crowd-pleaser | 5,484,035 | 6,021,172 | 2,807,006 | 3,845,222 |
+| debate-starter | 4,162,791 | 6,183,453 | 1,037,239 | 5,375,237 |
+
+Per-class one-vs-rest counts:
+
+| Class | TP | FP | FN | TN |
+|---|---|---|---|---|
+| low-engagement | 28,374,720 | 16,396,266 | 31,529,955 | 68,648,078 |
+| viral | 32,166,292 | 26,226,014 | 17,961,897 | 68,594,816 |
+| crowd-pleaser | 2,807,006 | 8,347,199 | 15,350,429 | 118,444,385 |
+| debate-starter | 5,375,237 | 25,256,285 | 11,383,483 | 102,934,014 |
+
+**Binary test confusion (rows = actual, columns = predicted):**
+
+| Actual \ Predicted | high-engagement | low-engagement |
+|---|---|---|
+| high-engagement | 60,219,254 | 24,825,090 |
+| low-engagement | 22,788,302 | 37,116,373 |
+
+Per-class one-vs-rest counts:
+
+| Class | TP | FP | FN | TN |
+|---|---|---|---|---|
+| high-engagement | 60,219,254 | 22,788,302 | 24,825,090 | 37,116,373 |
+| low-engagement | 37,116,373 | 24,825,090 | 22,788,302 | 60,219,254 |
+
+> [!NOTE]
+> Row-normalized versions of these confusion matrices, which make the per-class recall structure easier to read at a glance, are shown in the written report Figures section.
+
+Test WF1 exceeds train WF1 across all four models. This is consistent with the evaluation design rather than anomalous generalization: training predictions come from class-weighted fits over the balanced 30% stratified sample, while val/test carry the natural class distribution. The near-zero train/test gap combined with low minority-class F1 (crowd-pleaser ~0.19, debate-starter ~0.23) indicates high bias in the linear model, it lacks the capacity to separate the middle engagement tiers, not the variance that would indicate overfitting.
 
 
 ---
@@ -211,6 +246,43 @@ We define four engagement archetypes:
 - **Low-engagement**: low score, low comments — did not resonate with the community
 
 Class boundaries are assigned using per-subreddit quantile thresholds rather than global thresholds, accounting for the fact that 100 comments is unremarkable in r/AskReddit but exceptional in a small niche subreddit. This analysis requires distributed processing because constructing per-author behavioral features across hundreds of millions of posts, computing per-subreddit engagement baselines, and performing temporal aggregations exceed the memory and compute capacity of a single machine.
+
+
+## Figures
+
+This section collects the key visualizations that narrate the project, spanning data exploration, the SVD dimensionality reduction, model performance, and prediction behavior. Please note, some Milestone 4 figures are re-used below and component plots do not apply with HashingTF. 
+
+### Data Exploration
+
+![Score vs. Comments](outputs/figures/plot4_score_vs_comments.png)
+
+**Figure 1. Score versus comment count (log-log, 50k-post sample).** A weak positive correlation with substantial scatter shows that score and comment count capture different engagement phenomena rather than redundant signal. Posts in the high-comment, low-score region correspond to debate-starters and posts in the high-score, low-comment region to crowd-pleasers. This dispersion is the empirical justification for a four-archetype label built on the joint distribution of both axes rather than a single popularity metric.
+
+![Score Distribution](outputs/figures/plot3_score_distribution.png)
+
+**Figure 2. Post score distribution across the full corpus.** Score is heavily right-skewed, with the vast majority of posts in the single-digit range and each higher order of magnitude containing far fewer posts. A global engagement threshold would therefore classify nearly everything as low-engagement, motivating the per-subreddit quantile thresholds used to define the labels.
+
+### Dimensionality Reduction (SVD / LSA)
+
+![SVD Explained Energy](outputs/figures/svd_explained_energy.png)
+
+**Figure 3. Explained Frobenius energy of the truncated SVD.** The singular spectrum is steep only at the first component and nearly flat thereafter, and cumulative explained energy reaches just 7.9 percent at k=100 while rising almost linearly with no elbow. The title TF-IDF matrix has high effective rank, so no dimensionality reaches a conventional variance threshold and k=100 is selected as a compute and performance tradeoff rather than an energy target.
+
+### Model Performance
+
+![Logistic Regression WF1 by Split](outputs/figures/m4_lr_wf1_by_split.png)
+
+**Figure 4. Final model weighted F1 by split (Model 2, SVD + logistic regression).** All four logistic configurations are shown across train, validation, and test. The lighter-regularization Config B edges Config A on every split, and both the 4-class (0.479) and binary (0.672) test results exceed the structured-only Model 1 baselines, indicating that the SVD title features contribute predictive signal.
+
+### Predictions
+
+![4-Class Confusion Matrix](outputs/figures/m4_lr_4class_B_confusion_test.png)
+
+**Figure 5. Row-normalized 4-class confusion matrix on test (final model).** The diagonal shows correct classifications and the off-diagonal entries show false positives and false negatives per class. Low-engagement and viral are recovered well, while the middle archetypes crowd-pleaser and debate-starter are frequently absorbed into the two majority classes, the central limitation of a linear decision boundary on classes that are not linearly separable.
+
+![Binary Confusion Matrix](outputs/figures/m4_lr_binary_B_confusion_test.png)
+
+**Figure 6. Row-normalized binary confusion matrix on test (final model).** The high versus low engagement distinction is recovered far more cleanly than the four-tier task, with both classes correctly classified at well above chance and a modest lean toward predicting high-engagement.
 
 
 ## Methods
