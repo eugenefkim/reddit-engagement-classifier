@@ -508,7 +508,7 @@ The honest conclusion is **task-dependent**: title content features measurably h
 
 Both models were trained on the identical 117-dimensional set. Logistic regression won on test for both tasks (4-class 0.4793 vs 0.4493; binary 0.6723 vs 0.6371), despite XGBoost achieving higher *training* F1. The gradient-boosted model overfits the dense, low-energy SVD features because 100 components carrying 7.9% of the matrix energy give a tree ample room to fit sample-specific structure that does not generalize. This shows the well-known story of tree-based models overfitting or "memorizing" training data, so for our current pipeline we chose the LogReg as we believed the linear model generalized cleaner. 
 
-### Findings from Per-Class Cehavior and the Precision-Recall Tradeoff
+### Findings from Per-Class Behavior and the Precision-Recall Tradeoff
 
 The 4-class confusion structure is clear on model behavior: low-engagement and viral are learned well and the middle tiers are not. Crowd-pleaser (F1 ~0.19) and debate-starter (F1 ~0.23) are frequently absorbed into the two majority classes. This is expected behavior from a linear model on classes that are not linearly separable.
 
